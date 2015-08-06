@@ -133,12 +133,6 @@ class DataSource(val dsp: DataSourceParams)
             throw e
         }
       }
-      
-      val v = Int.MaxValue
-      val l = Long.MaxValue
-      val b: Int = 2147483647  
-      logger.info("max integer value = " + v.toString())
-      logger.info("max long value = " + l.toString())
       viewEventsRDD
   }
   
@@ -209,7 +203,6 @@ class DataSource(val dsp: DataSourceParams)
     itemsRDD
   }
 }
-
 
 case class User()
 
