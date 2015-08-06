@@ -20,6 +20,10 @@ case class ItemScore(
   score: Double
 ) extends Serializable
 
+case class ActualResult(
+    actualPredictions: Array[ViewEvent]
+) extends Serializable
+
 object ECommerceRecommendationEngine extends IEngineFactory {
   def apply() = {
     new Engine(

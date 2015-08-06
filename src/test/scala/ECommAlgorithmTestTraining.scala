@@ -12,7 +12,7 @@ import org.scalatest.junit.JUnitRunner
 import org.junit.runner.RunWith
 
 @RunWith(classOf[JUnitRunner])
-class ECommAlgorithmTest2
+class ECommAlgorithmTestTraining
 extends FlatSpec with EngineTestSparkContext with Matchers
 {
 
@@ -27,7 +27,7 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 			rank = 10,
 			numIterations = 20,
 			lambda = 0.01,
-			seed = Some(3)
+    	seed = Some(3)
 			)
   
   // create an algorithm instance
