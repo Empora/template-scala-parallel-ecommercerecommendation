@@ -1,11 +1,12 @@
 package org.template.ecommercerecommendation
 
-import io.prediction.controller.IEngineFactory
 import io.prediction.controller.Engine
+import io.prediction.controller.EngineFactory
 
 case class Query(
   user: Int,
   num: Int,
+  startTime: Long,
   categories: Option[Set[String]],
   whiteList: Option[Set[Int]],
   blackList: Option[Set[Int]]
@@ -21,10 +22,10 @@ case class ItemScore(
 ) extends Serializable
 
 case class ActualResult(
-    actualPredictions: Array[ViewEvent]
+    actualViews: Array[ViewEvent]
 ) extends Serializable
 
-object ECommerceRecommendationEngine extends IEngineFactory {
+object ECommerceRecommendationEngine extends EngineFactory {
   def apply() = {
     new Engine(
       classOf[DataSource],

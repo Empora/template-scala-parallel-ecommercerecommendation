@@ -2,7 +2,6 @@ package org.template.ecommercerecommendation
 
 import io.prediction.controller.PDataSource
 import io.prediction.controller.EmptyEvaluationInfo
-import io.prediction.controller.EmptyActualResult
 import io.prediction.controller.Params
 import io.prediction.data.storage.Event
 import io.prediction.data.store.PEventStore
@@ -10,7 +9,6 @@ import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import grizzled.slf4j.Logger
-import java.math.BigInteger
 
 case class DataSourceEvalParams(
     kFold: Int,
@@ -37,13 +35,37 @@ class DataSource(val dsp: DataSourceParams)
       eventsRDD.cache()  
     }
     
-    
-    val usersRDD: RDD[(Int, User)] = getUsers( sc )
-    val itemsRDD: RDD[(Int, Item)] = getItems( sc )
-  
+
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD )
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD )
 
+    val itemSetTimes: RDD[(Int,Long)] = getSetEvents(sc, "item")
+    val itemsRDD: RDD[(Int, Item)] = getItems( sc, itemSetTimes )
+    
+    
+    val tmp = itemsRDD.collect()
+    for ( i <- 0 to tmp.length-1 ) {
+      
+      val iid : Int = tmp(i)._1
+      val item : Item = tmp(i)._2
+        
+      logger.info( "id: " + iid + " set time: " + item.setTime )
+      
+    }
+    
+    
+    
+    
+    val usersRDD: RDD[(Int, User)] = getUsers( sc )
+
+    logger.info("readTraining:")
+    logger.info("number of item set events: " + itemSetTimes.count().toString());
+    logger.info("number of view events: " + viewEventsRDD.count().toString())
+    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
+    logger.info("number of users      : " + usersRDD.count().toString())
+    logger.info("number of items      : " + itemsRDD.count().toString())
+    
+    
     if ( cacheEvents ) {
       usersRDD.cache()
       itemsRDD.cache()
@@ -58,6 +80,23 @@ class DataSource(val dsp: DataSourceParams)
       buyEvents = buyEventsRDD
     )
   }
+  
+  
+  // get the set events stored in SparkContext sc. entityTypeName is e.g. "item"
+  // or "user"
+  def getSetEvents( sc: SparkContext, entityTypeName: String ) : RDD[(Int,Long)] =
+  {
+      val setEventsRDD: RDD[Event] = PEventStore.find(
+        appName = dsp.appName,
+        entityType = Some(entityTypeName),
+        eventNames = Some(List("$set"))
+      )(sc)
+      
+      val setTimes: RDD[(Int,Long)] = setEventsRDD.map { event => (event.entityId.toInt, event.eventTime.getMillis) }
+      
+      setTimes
+  }
+  
   
   override
   def readEval(sc: SparkContext) 
@@ -80,20 +119,27 @@ class DataSource(val dsp: DataSourceParams)
     val views: RDD[(ViewEvent, Long)] = viewEvts.zipWithUniqueId
     val buys: RDD[(BuyEvent, Long)] = buyEvts.zipWithUniqueId
     
+    logger.info("views number of views = " + views.count().toString())
+    logger.info("number of buys = " + buys.count().toString())
+    logger.info("number of users = " + usrsRDD.count().toString())
+    logger.info("number of items = " + itmsRDD.count().toString())
+    
     ( 0 until kFold ).map { idx => {
-      
       // take (kFold-1) view out kFold views as training sample
-      val trainingViews = views.filter(_._2 % kFold != idx  ).map(_._1)
+      val trainingViews = views.filter( _._2 % kFold != idx  ).map(_._1)
       val trainingBuys = buys.filter( _._2 % kFold != idx ).map( _._1 )
+
       // take each kFold-th view as test samples
       val testingViews = views.filter(_._2 % kFold == idx ).map(_._1)
-      
       val testingUsers: RDD[( Int, Iterable[ViewEvent] )] = testingViews.groupBy( _.user )
+
+      val testUserIdsRDD = testingUsers.map{ case( id, v ) => id }
+      val testUserIdsArray = testUserIdsRDD.collect()
       
       ( new TrainingData( usrsRDD, itmsRDD, trainingViews, trainingBuys ),
         new EmptyEvaluationInfo(),
         testingUsers.map {
-          case ( user, viewevents ) => ( Query( user, evalParams.queryNum, None, None, None ), 
+          case ( user, viewevents ) => ( Query( user, evalParams.queryNum, 0, None, None, None ), 
                                          ActualResult( viewevents.toArray ) )
         }
       )
@@ -182,6 +228,35 @@ class DataSource(val dsp: DataSourceParams)
     usersRDD
   }
   
+  def getItems(sc: SparkContext, itemsSetTimes: RDD[(Int,Long)]): RDD[(Int, Item)] =
+  {
+             
+      val coll = itemsSetTimes.collect()
+      
+      var A : Map[Int,Long] = Map()
+      for ( i <- 0 to coll.length - 1 ) {
+        A += ( coll(i)._1 -> coll(i)._2 )
+      }
+ 
+      val itemsRDD: RDD[(Int, Item)] = PEventStore.aggregateProperties(
+        appName = dsp.appName,
+        entityType = "item"
+      )(sc).map { case (entityId, properties) =>
+      val item = try {
+        Item(categories = properties.getOpt[List[String]]("categories"),A.apply(entityId.toInt))
+      } catch {
+        case e: Exception => {
+          logger.error(s"Failed to get properties ${properties} of" +
+            s" item ${entityId}. Exception: ${e}.")
+          throw e
+        }
+      }
+      (entityId.toInt, item)
+    }
+    itemsRDD
+  }
+  
+  
   def getItems(sc: SparkContext): RDD[(Int, Item)] =
   {
      val itemsRDD: RDD[(Int, Item)] = PEventStore.aggregateProperties(
@@ -190,7 +265,7 @@ class DataSource(val dsp: DataSourceParams)
     )(sc).map { case (entityId, properties) =>
       val item = try {
         // Assume categories is optional property of item.
-        Item(categories = properties.getOpt[List[String]]("categories"))
+        Item(categories = properties.getOpt[List[String]]("categories"), setTime = 0)
       } catch {
         case e: Exception => {
           logger.error(s"Failed to get properties ${properties} of" +
@@ -206,7 +281,7 @@ class DataSource(val dsp: DataSourceParams)
 
 case class User()
 
-case class Item(categories: Option[List[String]])
+case class Item(categories: Option[List[String]], setTime: Long)
 
 case class ViewEvent(user: Int, item: Int, t: Long)
 

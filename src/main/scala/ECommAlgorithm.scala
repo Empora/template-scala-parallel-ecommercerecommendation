@@ -126,7 +126,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     */
   def genMLlibRating(data: PreparedData): RDD[MLlibRating] = {
 
-	logger.info(s"Getting mllib ratings from viewEvents ${data.viewEvents.partitions.size}")
+	logger.info(s"Getting mllib ratings from viewEvents: number of partitions: ${data.viewEvents.partitions.size}")
 
 
     val mllibRatings = data.viewEvents
@@ -352,12 +352,14 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     whiteList: Option[Set[Int]],
     blackList: Set[Int]
   ): Array[(Int, Double)] = {
+    
     val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
       .filter { case (i, pm) =>
         pm.features.isDefined &&
         isCandidateItem(
           i = i,
           item = pm.item,
+          tstart = query.startTime,
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -373,8 +375,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       .seq // convert back to sequential collection
 
     val ord = Ordering.by[(Int, Double), Double](_._2).reverse
+    
     val topScores = getTopN(indexScores, query.num)(ord).toArray
-
+    
     topScores
   }
 
@@ -385,11 +388,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     whiteList: Option[Set[Int]],
     blackList: Set[Int]
   ): Array[(Int, Double)] = {
+    
     val indexScores: Map[Int, Double] = productModels.par // convert back to sequential collection
       .filter { case (i, pm) =>
         isCandidateItem(
           i = i,
           item = pm.item,
+          tstart = query.startTime,
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -415,12 +420,14 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     whiteList: Option[Set[Int]],
     blackList: Set[Int]
   ): Array[(Int, Double)] = {
+
     val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
       .filter { case (i, pm) =>
         pm.features.isDefined &&
         isCandidateItem(
           i = i,
           item = pm.item,
+          tstart = query.startTime,
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -496,11 +503,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   def isCandidateItem(
     i: Int,
     item: Item,
+    tstart: Long, 
     categories: Option[Set[String]],
     whiteList: Option[Set[Int]],
     blackList: Set[Int]
   ): Boolean = {
     // can add other custom filtering here
+    tstart <= item.setTime &&
     whiteList.map(_.contains(i)).getOrElse(true) &&
     !blackList.contains(i) &&
     // filter categories
@@ -510,7 +519,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         !(itemCat.toSet.intersect(cat).isEmpty)
       }.getOrElse(false) // discard this item if it has no categories
     }.getOrElse(true)
-
   }
 
 }
