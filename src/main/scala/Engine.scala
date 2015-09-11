@@ -3,10 +3,12 @@ package org.template.ecommercerecommendation
 import io.prediction.controller.Engine
 import io.prediction.controller.EngineFactory
 
+import org.joda.time.DateTime
+
 case class Query(
   user: Int,
   num: Int,
-  startTime: Long,
+  startTime: Option[String],
   categories: Option[Set[String]],
   whiteList: Option[Set[Int]],
   blackList: Option[Set[Int]]

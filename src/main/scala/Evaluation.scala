@@ -86,6 +86,7 @@ trait BaseEngineParamsList extends EngineParamsGenerator
   protected val baseEP = EngineParams(
     dataSourceParams = DataSourceParams( 
        appName = "EvalApp",
+       startTimeTrain = "2005-11-02T09:39:45.618-08:00",
        evalParams = Some( DataSourceEvalParams( kFold = 2, queryNum = 100 ) )
     )
   )

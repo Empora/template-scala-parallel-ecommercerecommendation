@@ -12,6 +12,8 @@ import org.apache.spark.mllib.recommendation.ALS
 import org.apache.spark.mllib.recommendation.{Rating => MLlibRating}
 import org.apache.spark.rdd.RDD
 
+import org.joda.time.DateTime
+
 import grizzled.slf4j.Logger
 
 import scala.collection.mutable.PriorityQueue
@@ -101,6 +103,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val productFeatures: Map[Int, (Item, Option[Array[Double]])] =
       items.leftOuterJoin(m.productFeatures).collectAsMap.toMap
 
+//    val popularCount = trainDefaultViews(data)
     val popularCount = trainDefault(data)
 
     val productModels: Map[Int, ProductModel] = productFeatures
@@ -169,6 +172,21 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     buyCountsRDD.collectAsMap.toMap
   }
+  
+  def trainDefaultViews(
+    data: PreparedData): Map[Int, Int] = {
+          val viewCountsRDD: RDD[(Int, Int)] = data.viewEvents
+      .map { r =>
+        // Convert user and item String IDs to Int index
+        val uindex = r.user
+        val iindex = r.item
+        (uindex, iindex, 1)
+      }
+      .map { case (u, i, v) => (i, 1) } // key is item
+      .reduceByKey{ case (a, b) => a + b } // count number of items occurrence
+
+    viewCountsRDD.collectAsMap.toMap
+  }
 
   def predict(model: ECommModel, query: Query): PredictedResult = {
 
@@ -213,7 +231,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           blackList = finalBlackList
         )
       } else {
-        predictSimilar(
+        predictSimilarItems(
           recentFeatures = recentFeatures,
           productModels = productModels,
           query = query,
@@ -359,7 +377,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         isCandidateItem(
           i = i,
           item = pm.item,
-          tstart = query.startTime,
+//          tstart = 0,
+          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00.000Z"))).getMillis,
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -394,7 +413,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         isCandidateItem(
           i = i,
           item = pm.item,
-          tstart = query.startTime,
+          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00.000Z"))).getMillis,
+//          tstart = query.startTime.getOrElse(0),
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -413,7 +433,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   }
 
   /** Return top similar items based on items user recently has action on */
-  def predictSimilar(
+  def predictSimilarItems(
     recentFeatures: Vector[Array[Double]],
     productModels: Map[Int, ProductModel],
     query: Query,
@@ -427,7 +447,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         isCandidateItem(
           i = i,
           item = pm.item,
-          tstart = query.startTime,
+          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00.000Z"))).getMillis,
+//          tstart = query.startTime.getOrElse(0),
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -510,12 +531,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   ): Boolean = {
     // can add other custom filtering here
     tstart <= item.setTime &&
-    whiteList.map(_.contains(i)).getOrElse(true) &&
+//    item.setTime.isAfter(tstart) &&                        // check whether the recommended item has been uploaded after desired start time
+    whiteList.map(_.contains(i)).getOrElse(true) &&  // check 
     !blackList.contains(i) &&
     // filter categories
     categories.map { cat =>
       item.categories.map { itemCat =>
-        // keep this item if has ovelap categories with the query
+        // keep this item if has overlap categories with the query
         !(itemCat.toSet.intersect(cat).isEmpty)
       }.getOrElse(false) // discard this item if it has no categories
     }.getOrElse(true)

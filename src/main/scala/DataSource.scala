@@ -10,13 +10,16 @@ import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import grizzled.slf4j.Logger
 
+import org.joda.time.DateTime
+
 case class DataSourceEvalParams(
     kFold: Int,
     queryNum: Int
 )
 
 case class DataSourceParams(
-    appName: String,
+    appName: String,            // the name from engine.json file
+    startTimeTrain: String,     // the time set in engine.json file 
     evalParams: Option[DataSourceEvalParams]
 ) extends Params
 
@@ -36,34 +39,29 @@ class DataSource(val dsp: DataSourceParams)
     }
     
 
-    val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD )
-    val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD )
+    val minTimeTrain: Long = new DateTime(dsp.startTimeTrain).getMillis
+    logger.info("minTimeTrain = " + minTimeTrain)
+    
+    
+    val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD, minTimeTrain )
+    val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD, minTimeTrain )
 
-    val itemSetTimes: RDD[(Int,Long)] = getSetEvents(sc, "item")
+    val itemSetTimes: RDD[(Int,Long)] = getItemSetTimes(sc, "item")
+//    val itemSetTimes: RDD[(Int,DateTime)] = getItemSetTimes(sc, "item")
     val itemsRDD: RDD[(Int, Item)] = getItems( sc, itemSetTimes )
-    
-    
-    val tmp = itemsRDD.collect()
-    for ( i <- 0 to tmp.length-1 ) {
-      
-      val iid : Int = tmp(i)._1
-      val item : Item = tmp(i)._2
-        
-      logger.info( "id: " + iid + " set time: " + item.setTime )
-      
-    }
-    
-    
-    
     
     val usersRDD: RDD[(Int, User)] = getUsers( sc )
 
-    logger.info("readTraining:")
-    logger.info("number of item set events: " + itemSetTimes.count().toString());
-    logger.info("number of view events: " + viewEventsRDD.count().toString())
-    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
-    logger.info("number of users      : " + usersRDD.count().toString())
-    logger.info("number of items      : " + itemsRDD.count().toString())
+    // uncomment this to see some information of how many events (set,view,buy,...)
+    // are stored
+    // CAUTION: for big data sets the execution of these few lines of code could last
+    // minutes (hours maybe)
+//    logger.info("readTraining:")
+//    logger.info("number of item set events: " + itemSetTimes.count().toString());
+//    logger.info("number of view events: " + viewEventsRDD.count().toString())
+//    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
+//    logger.info("number of users      : " + usersRDD.count().toString())
+//    logger.info("number of items      : " + itemsRDD.count().toString())
     
     
     if ( cacheEvents ) {
@@ -82,22 +80,6 @@ class DataSource(val dsp: DataSourceParams)
   }
   
   
-  // get the set events stored in SparkContext sc. entityTypeName is e.g. "item"
-  // or "user"
-  def getSetEvents( sc: SparkContext, entityTypeName: String ) : RDD[(Int,Long)] =
-  {
-      val setEventsRDD: RDD[Event] = PEventStore.find(
-        appName = dsp.appName,
-        entityType = Some(entityTypeName),
-        eventNames = Some(List("$set"))
-      )(sc)
-      
-      val setTimes: RDD[(Int,Long)] = setEventsRDD.map { event => (event.entityId.toInt, event.eventTime.getMillis) }
-      
-      setTimes
-  }
-  
-  
   override
   def readEval(sc: SparkContext) 
   : Seq[ (TrainingData, EmptyEvaluationInfo, RDD[(Query,ActualResult)])] = 
@@ -110,8 +92,8 @@ class DataSource(val dsp: DataSourceParams)
     val allEvents: RDD[Event] = getAllEvents( sc )
     
     // get the view events
-    val viewEvts: RDD[ViewEvent] = getViewEvents( allEvents )
-    val buyEvts: RDD[BuyEvent] = getBuyEvents( allEvents )
+    val viewEvts: RDD[ViewEvent] = getViewEvents( allEvents, 0L )
+    val buyEvts: RDD[BuyEvent] = getBuyEvents( allEvents, 0L )
     val usrsRDD: RDD[(Int, User)] = getUsers( sc )
     val itmsRDD: RDD[(Int, Item)] = getItems( sc )
 
@@ -139,13 +121,18 @@ class DataSource(val dsp: DataSourceParams)
       ( new TrainingData( usrsRDD, itmsRDD, trainingViews, trainingBuys ),
         new EmptyEvaluationInfo(),
         testingUsers.map {
-          case ( user, viewevents ) => ( Query( user, evalParams.queryNum, 0, None, None, None ), 
+          case ( user, viewevents ) => ( Query( user, evalParams.queryNum, None, None, None, None ), 
                                          ActualResult( viewevents.toArray ) )
         }
       )
     }}
   }
   
+  
+  /**
+   * This method searches the current SparkContext for all events specified
+   * in the method, e.g. all 'view' and 'buy' events a user has made
+   */
   def getAllEvents(sc: SparkContext): RDD[Event] =
   {
     val eventsRDD: RDD[Event] = PEventStore.find(
@@ -154,15 +141,34 @@ class DataSource(val dsp: DataSourceParams)
       eventNames = Some(List("view", "buy")),
       // targetEntityType is optional field of an event.
       targetEntityType = Some(Some("item")))(sc)
-
       eventsRDD
+  }
+
+  /**
+   *  This method returns an RDD of pairs (entityID,t), which correspond to the id of the entities
+   *  and the time when this entity has been submitted by eventClient
+   *  For example, call this method with entityTypeName = "item" to obtain the time 
+   *  when the items have been uploaded 
+   */
+  def getItemSetTimes( sc: SparkContext, entityTypeName: String ) : RDD[(Int,Long)] =
+  {
+      val setEventsRDD: RDD[Event] = PEventStore.find(
+        appName = dsp.appName,
+        entityType = Some(entityTypeName),
+        eventNames = Some(List("$set"))
+      )(sc)
+      
+//      val setTimes: RDD[(Int,DateTime)] = setEventsRDD.map { event => (event.entityId.toInt, event.eventTime) }
+      val setTimes: RDD[(Int,Long)] = setEventsRDD.map { event => (event.entityId.toInt, event.eventTime.getMillis) }
+      setTimes
   }
   
   
-  def getViewEvents(allEvents: RDD[Event]): RDD[ViewEvent] =
+  /**
+   * This method gets all "view" events from all events
+   */
+  def getViewEvents(allEvents: RDD[Event], minT: Long): RDD[ViewEvent] =
   {
-      val cacheEvents = false
-      
       val viewEventsRDD: RDD[ViewEvent] = allEvents
       .filter { event => event.event == "view" }
       .map { event =>
@@ -178,12 +184,15 @@ class DataSource(val dsp: DataSourceParams)
               s" Exception: ${e}.")
             throw e
         }
-      }
+      }.filter { x => x.t > 0L }
       viewEventsRDD
   }
   
   
-  def getBuyEvents( allEvents: RDD[Event] ): RDD[BuyEvent] =
+  /**
+   * this method returns all buy events contained in allEvents
+   */
+  def getBuyEvents( allEvents: RDD[Event], minT: Long ): RDD[BuyEvent] =
   {
     val buyEventsRDD: RDD[BuyEvent] = allEvents
       .filter { event => event.event == "buy" }
@@ -200,14 +209,16 @@ class DataSource(val dsp: DataSourceParams)
               s" Exception: ${e}.")
             throw e
         }
-      }
+      }.filter { x => x.t >= 0L }
       buyEventsRDD
   }
   
+  /**
+   * get the users  
+   */
   def getUsers(sc: SparkContext): RDD[(Int, User)] =
   {
      val cacheEvents = false
-    
     
     // create a RDD of (entityID, User)
     val usersRDD: RDD[(Int, User)] = PEventStore.aggregateProperties(
@@ -228,9 +239,12 @@ class DataSource(val dsp: DataSourceParams)
     usersRDD
   }
   
+  /**
+   * get items from SparkContext. Each item gets attached the categories, if there are some,
+   * and the time when the item has been uploaded (i.e. has been submitted by eventClient)
+   */
   def getItems(sc: SparkContext, itemsSetTimes: RDD[(Int,Long)]): RDD[(Int, Item)] =
   {
-             
       val coll = itemsSetTimes.collect()
       
       var A : Map[Int,Long] = Map()
@@ -256,7 +270,9 @@ class DataSource(val dsp: DataSourceParams)
     itemsRDD
   }
   
-  
+  /**
+   * Default method to get items. The items do not get attached any time information.
+   */
   def getItems(sc: SparkContext): RDD[(Int, Item)] =
   {
      val itemsRDD: RDD[(Int, Item)] = PEventStore.aggregateProperties(
@@ -265,7 +281,7 @@ class DataSource(val dsp: DataSourceParams)
     )(sc).map { case (entityId, properties) =>
       val item = try {
         // Assume categories is optional property of item.
-        Item(categories = properties.getOpt[List[String]]("categories"), setTime = 0)
+        Item(categories = properties.getOpt[List[String]]("categories"), setTime = 0L)
       } catch {
         case e: Exception => {
           logger.error(s"Failed to get properties ${properties} of" +
