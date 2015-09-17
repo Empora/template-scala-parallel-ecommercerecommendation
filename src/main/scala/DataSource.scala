@@ -40,12 +40,16 @@ class DataSource(val dsp: DataSourceParams)
     
 
     val minTimeTrain: Long = new DateTime(dsp.startTimeTrain).getMillis
-    logger.info("minTimeTrain = " + minTimeTrain)
+    logger.info("Preparing training data with view events not older than " + dsp.startTimeTrain)
+    
     
     
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD, minTimeTrain )
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD, minTimeTrain )
 
+//    logger.info("number of view events: " + viewEventsRDD.count().toString())
+//    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
+    
     val itemSetTimes: RDD[(Int,Long)] = getItemSetTimes(sc, "item")
 //    val itemSetTimes: RDD[(Int,DateTime)] = getItemSetTimes(sc, "item")
     val itemsRDD: RDD[(Int, Item)] = getItems( sc, itemSetTimes )
@@ -58,8 +62,7 @@ class DataSource(val dsp: DataSourceParams)
     // minutes (hours maybe)
 //    logger.info("readTraining:")
 //    logger.info("number of item set events: " + itemSetTimes.count().toString());
-//    logger.info("number of view events: " + viewEventsRDD.count().toString())
-//    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
+   
 //    logger.info("number of users      : " + usersRDD.count().toString())
 //    logger.info("number of items      : " + itemsRDD.count().toString())
     
@@ -184,7 +187,8 @@ class DataSource(val dsp: DataSourceParams)
               s" Exception: ${e}.")
             throw e
         }
-      }.filter { x => x.t > 0L }
+      }
+      .filter { _.t >= minT  }
       viewEventsRDD
   }
   
@@ -209,7 +213,7 @@ class DataSource(val dsp: DataSourceParams)
               s" Exception: ${e}.")
             throw e
         }
-      }.filter { x => x.t >= 0L }
+      }.filter { _.t >= minT }
       buyEventsRDD
   }
   

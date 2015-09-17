@@ -198,7 +198,7 @@ class ECommAlgorithmTest
       query = Query(
         user = 0,
         num = 5,
-        startTime = Some( "2000-01-01T12:00:00.000Z" ),
+        startTime = Some( "2000-01-01T12:00:00" ),
         categories = None,
         whiteList = None,
         blackList = None),
@@ -222,7 +222,7 @@ class ECommAlgorithmTest
       query = Query(
         user = 0,
         num = 5,
-        startTime = Some( "2013-06-01T12:00:00.000Z" ),
+        startTime = Some( "2013-06-01T12:00:00" ),
         categories = None,
         whiteList = None,
         blackList = None),
@@ -245,7 +245,7 @@ class ECommAlgorithmTest
       query = Query(
         user = 0,
         num = 5,
-        startTime = Some( "2014-06-01T12:00:00.000Z" ),
+        startTime = Some( "2014-06-01T12:00:00" ),
         categories = None,
         whiteList = None,
         blackList = None),

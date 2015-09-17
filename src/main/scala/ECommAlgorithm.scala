@@ -91,7 +91,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       iterations = ap.numIterations,
       lambda = ap.lambda,
       blocks = -1,
-      alpha = 1.0,
+      alpha = 2.0,
       seed = seed
     )
 
@@ -103,8 +103,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val productFeatures: Map[Int, (Item, Option[Array[Double]])] =
       items.leftOuterJoin(m.productFeatures).collectAsMap.toMap
 
-//    val popularCount = trainDefaultViews(data)
-    val popularCount = trainDefault(data)
+    val popularCount = trainDefaultViews(data)
+//    val popularCount = trainDefault(data)
 
     val productModels: Map[Int, ProductModel] = productFeatures
       .map { case (index, (item, features)) =>
@@ -378,7 +378,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           i = i,
           item = pm.item,
 //          tstart = 0,
-          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00.000Z"))).getMillis,
+          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
           categories = query.categories,
           whiteList = whiteList,
           blackList = blackList
@@ -413,7 +413,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         isCandidateItem(
           i = i,
           item = pm.item,
-          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00.000Z"))).getMillis,
+          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
 //          tstart = query.startTime.getOrElse(0),
           categories = query.categories,
           whiteList = whiteList,
@@ -447,7 +447,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         isCandidateItem(
           i = i,
           item = pm.item,
-          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00.000Z"))).getMillis,
+          tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
 //          tstart = query.startTime.getOrElse(0),
           categories = query.categories,
           whiteList = whiteList,
