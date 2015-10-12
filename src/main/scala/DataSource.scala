@@ -38,34 +38,19 @@ class DataSource(val dsp: DataSourceParams)
       eventsRDD.cache()  
     }
     
-
     val minTimeTrain: Long = new DateTime(dsp.startTimeTrain).getMillis
     logger.info("Preparing training data with view events not older than " + dsp.startTimeTrain)
     
-    
-    
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD, minTimeTrain )
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD, minTimeTrain )
-
+    
 //    logger.info("number of view events: " + viewEventsRDD.count().toString())
 //    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
     
     val itemSetTimes: RDD[(Int,Long)] = getItemSetTimes(sc, "item")
 //    val itemSetTimes: RDD[(Int,DateTime)] = getItemSetTimes(sc, "item")
     val itemsRDD: RDD[(Int, Item)] = getItems( sc, itemSetTimes )
-    
     val usersRDD: RDD[(Int, User)] = getUsers( sc )
-
-    // uncomment this to see some information of how many events (set,view,buy,...)
-    // are stored
-    // CAUTION: for big data sets the execution of these few lines of code could last
-    // minutes (hours maybe)
-//    logger.info("readTraining:")
-//    logger.info("number of item set events: " + itemSetTimes.count().toString());
-   
-//    logger.info("number of users      : " + usersRDD.count().toString())
-//    logger.info("number of items      : " + itemsRDD.count().toString())
-    
     
     if ( cacheEvents ) {
       usersRDD.cache()
@@ -124,7 +109,7 @@ class DataSource(val dsp: DataSourceParams)
       ( new TrainingData( usrsRDD, itmsRDD, trainingViews, trainingBuys ),
         new EmptyEvaluationInfo(),
         testingUsers.map {
-          case ( user, viewevents ) => ( Query( user, evalParams.queryNum, None, None, None, None ), 
+          case ( user, viewevents ) => ( Query( "recom", evalParams.queryNum, Some(user), None, None, None, None, None, None ), 
                                          ActualResult( viewevents.toArray ) )
         }
       )
@@ -224,13 +209,59 @@ class DataSource(val dsp: DataSourceParams)
   {
      val cacheEvents = false
     
+     val v: RDD[(Int,Long)]  = PEventStore.find(
+       appName = dsp.appName,
+       entityType = Some("user"),
+       eventNames = Some(List("view"))
+       )(sc).map{case viewevent => ( viewevent.entityId.toInt, viewevent.eventTime.getMillis )}
+   
+//     val v2  = PEventStore.find(
+//       appName = dsp.appName,
+//       entityType = Some("user"),
+//       eventNames = Some(List("view"))
+//       )(sc)
+//     
+//     val bla = v2.collect()
+//     for ( i <- 0 to bla.size-1 ) {
+//       val blupp = bla.apply(i)
+//       val uid = blupp.entityId
+//       val iid = blupp.targetEntityId
+//       val t = blupp.eventTime.getMillis
+//       val dt = new DateTime()
+//       dt.withMillis(t)
+//       logger.info("u = " + uid.toString() + " i = " + iid.toString() + " t = " + t.toString())
+//     }
+//     
+     val aggregatedDates = v.groupByKey
+     
+//     logger.info("aggregatedDates:")
+//     val tmp = aggregatedDates.collect()
+//     for ( i <- 0 to aggregatedDates.count().toInt-1 ) {
+//       val bla = tmp.apply(i)
+//       val id = bla._1
+//       val iter = bla._2.iterator
+//       logger.info("id = " + id.toString())
+//       while ( iter.hasNext ) {
+//         val d = new DateTime()
+//         d.withMillis(iter.next())
+//         logger.info(d.toDateTime().toString())
+//       }
+  
+//     }
+     
+     val maxDates = aggregatedDates.map{ case ( id, iter ) => ( id, iter.toArray.reduceLeft( _ max _ ) ) }
+     
+     val datesMap = maxDates.collectAsMap()
+     
     // create a RDD of (entityID, User)
     val usersRDD: RDD[(Int, User)] = PEventStore.aggregateProperties(
       appName = dsp.appName,
       entityType = "user"
     )(sc).map { case (entityId, properties) =>
       val user = try {
-        User()
+//         User(None)
+        User( datesMap.get(entityId.toInt).orElse(Some(0)) )
+//        User( datesMap.get(entityId.toInt) )
       } catch {
         case e: Exception => {
           logger.error(s"Failed to get properties ${properties} of" +
@@ -240,6 +271,7 @@ class DataSource(val dsp: DataSourceParams)
       }
       (entityId.toInt, user)
     }
+    
     usersRDD
   }
   
@@ -299,13 +331,40 @@ class DataSource(val dsp: DataSourceParams)
   }
 }
 
-case class User()
 
-case class Item(categories: Option[List[String]], setTime: Long)
+case class User(
+    lastViewEventDate: Option[Long] // time stamp of the latest view event of the user
+    )
 
-case class ViewEvent(user: Int, item: Int, t: Long)
+// object of type item
+//  * optionally contains a list of categories ("male","female","outfit","product")
+//  * contains the time stamp indicating when the item has been uploaded
+case class Item(
+    categories: Option[List[String]],
+    setTime: Long
+    )
 
-case class BuyEvent(user: Int, item: Int, t: Long)
+// object of class ViewEvent contains
+//  * the user id
+//  * the item id
+//  * the time stamp
+// and represents the event of when the user viewed (liked) the item
+case class ViewEvent(
+    user: Int,
+    item: Int,
+    t: Long
+    )
+
+// object of class ViewEvent contains
+//  * the user id
+//  * the item id
+//  * the time stamp
+// and represents the event of when the user bought the item
+case class BuyEvent(
+    user: Int,
+    item: Int,
+    t: Long
+    )
 
 class TrainingData(
   val users: RDD[(Int, User)],

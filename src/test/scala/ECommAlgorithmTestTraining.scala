@@ -35,11 +35,11 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 	val algorithm = new ECommAlgorithm(algorithmParams)
 
   // create the user objects
-	val u1 = User( )
-	val u2 = User( )
-	val u3 = User( )
-	val u4 = User( )
-	val u5 = User( )
+	val u1 = User( None )
+	val u2 = User( None )
+	val u3 = User( None )
+	val u4 = User( None )
+	val u5 = User( None )
 
   // connect ids and user objects
 	val users = Map(

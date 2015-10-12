@@ -30,7 +30,7 @@ class ECommAlgorithmTest
 
   val itemStringIntMap = BiMap(Map(0 -> 0, 1 -> 1, 2 -> 2))
 
-  val users = Map(0 -> User(), 1 -> User())
+  val users = Map(0 -> User(None), 1 -> User(None))
 
 
   val i0 = Item(categories = Some(List("c0", "c1")),0)
@@ -108,14 +108,19 @@ class ECommAlgorithmTest
         2 -> ProductModel(i2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        user = 0,
+        method = "recom",
         num = 5,
+        user = Some(0),
         startTime = None,
         categories = Some(Set("c0")),
         whiteList = None,
-        blackList = None),
-      whiteList = None,
-      blackList = Set()
+        blackList = None,
+        numberOfClusters = None,
+        returnCluster = None
+      ),
+        
+        whiteList = None,
+        blackList = Set()
     )
     
     val expected = Array((2, 7.5), (0, 5.0))
@@ -131,12 +136,16 @@ class ECommAlgorithmTest
         2 -> ProductModel(i2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        user = 0,
+        method = "recom",
         num = 5,
+        user = Some(0),
         startTime = None,
         categories = None,
         whiteList = None,
-        blackList = None),
+        blackList = None, 
+        numberOfClusters = None,
+        returnCluster = None
+      ),
       whiteList = None,
       blackList = Set()
     )
@@ -155,12 +164,16 @@ class ECommAlgorithmTest
         2 -> ProductModel(i2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        user = 0,
+        method = "recom",
         num = 5,
+        user = Some(0),
         startTime = None,
         categories = Some(Set("c0")),
         whiteList = None,
-        blackList = None),
+        blackList = None,
+        numberOfClusters = None,
+        returnCluster = None
+      ),
       whiteList = None,
       blackList = Set()
     )
@@ -196,12 +209,16 @@ class ECommAlgorithmTest
         2 -> ProductModel(outfit2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        user = 0,
+        method = "recom",
         num = 5,
+        user = Some(0),
         startTime = Some( "2000-01-01T12:00:00" ),
         categories = None,
         whiteList = None,
-        blackList = None),
+        blackList = None,
+        numberOfClusters = None,
+        returnCluster = None
+      ),
       whiteList = None,
       blackList = Set()
     )
@@ -220,12 +237,16 @@ class ECommAlgorithmTest
         2 -> ProductModel(outfit2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        user = 0,
+        method = "recom",
         num = 5,
+        user = Some(0),
         startTime = Some( "2013-06-01T12:00:00" ),
         categories = None,
         whiteList = None,
-        blackList = None),
+        blackList = None,
+        numberOfClusters = None,
+        returnCluster = None
+      ),
       whiteList = None,
       blackList = Set()
     )
@@ -243,12 +264,16 @@ class ECommAlgorithmTest
         2 -> ProductModel(outfit2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        user = 0,
+        method = "recom",
         num = 5,
+        user = Some(0),
         startTime = Some( "2014-06-01T12:00:00" ),
         categories = None,
         whiteList = None,
-        blackList = None),
+        blackList = None,
+        numberOfClusters = None,
+        returnCluster = None
+      ),
       whiteList = None,
       blackList = Set()
     )

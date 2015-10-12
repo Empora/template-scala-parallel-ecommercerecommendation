@@ -12,8 +12,8 @@ class PreparatorTest
 
   val preparator = new Preparator()
   val users = Map(
-    0 -> User(),
-    1 -> User()
+    0 -> User( None ),
+    1 -> User( None )
   )
 
   val items = Map(
