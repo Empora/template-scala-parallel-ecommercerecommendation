@@ -208,10 +208,11 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   }
 
   
-  // the main prediction method, entry point for incoming queries from engine
-  // ! do not rename -- predictionIO framework specific name !
-  // here it is just decided whether to return standard recommendations for a specific user
-  // or return item suggestions based on clustering result
+  /** the main prediction method, entry point for incoming queries from engine
+   * ! do not rename -- predictionIO framework specific name !
+   * here it is just decided whether to return standard recommendations for a specific user
+   * or return item suggestions based on clustering result
+   */
   def predict(model: ECommModel, query: Query): PredictedResult = {
 
     logger.info("************** NEW QUERY **************")
@@ -243,7 +244,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val nrItems: Int = 2000
     val daysBack: Long = 60L
     val maxIterations = 40
-    val numClusters = query.numberOfClusters.getOrElse(5)
+    val numClusters = query.numberOfClusters.getOrElse(10)
     
     logger.info("computing " + nrItems.toString() + " most liked items of last " +
        daysBack.toString() + "days for cluster input")
