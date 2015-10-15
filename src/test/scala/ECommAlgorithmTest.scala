@@ -26,10 +26,6 @@ class ECommAlgorithmTest
   )
   val algorithm = new ECommAlgorithm(algorithmParams)
 
-  val userStringIntMap = BiMap(Map(0 -> 0, 1 -> 1))
-
-  val itemStringIntMap = BiMap(Map(0 -> 0, 1 -> 1, 2 -> 2))
-
   val users = Map(0 -> User(None), 1 -> User(None))
 
 
@@ -108,7 +104,7 @@ class ECommAlgorithmTest
         2 -> ProductModel(i2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        method = "recom",
+        method = "recommend",
         num = 5,
         user = Some(0),
         startTime = None,
@@ -136,7 +132,7 @@ class ECommAlgorithmTest
         2 -> ProductModel(i2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        method = "recom",
+        method = "recommend",
         num = 5,
         user = Some(0),
         startTime = None,
@@ -164,7 +160,7 @@ class ECommAlgorithmTest
         2 -> ProductModel(i2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        method = "recom",
+        method = "recommend",
         num = 5,
         user = Some(0),
         startTime = None,
@@ -209,7 +205,7 @@ class ECommAlgorithmTest
         2 -> ProductModel(outfit2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        method = "recom",
+        method = "recommend",
         num = 5,
         user = Some(0),
         startTime = Some( "2000-01-01T12:00:00" ),
@@ -237,7 +233,7 @@ class ECommAlgorithmTest
         2 -> ProductModel(outfit2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        method = "recom",
+        method = "recommend",
         num = 5,
         user = Some(0),
         startTime = Some( "2013-06-01T12:00:00" ),
@@ -264,7 +260,7 @@ class ECommAlgorithmTest
         2 -> ProductModel(outfit2, Some(Array(1.0, 3.0, 1.0)), 1)
       ),
       query = Query(
-        method = "recom",
+        method = "recommend",
         num = 5,
         user = Some(0),
         startTime = Some( "2014-06-01T12:00:00" ),

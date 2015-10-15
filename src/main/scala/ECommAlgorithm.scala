@@ -8,6 +8,7 @@ import io.prediction.data.store.LEventStore
 import io.prediction.data.store.PEventStore
 
 import org.apache.spark.SparkContext
+import org.apache.spark.SparkConf
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.mllib.recommendation.ALS
@@ -25,6 +26,8 @@ import org.joda.time.DateTime
 import breeze.linalg.shuffle
 import grizzled.slf4j.Logger
 
+import java.util.Calendar
+import java.text.SimpleDateFormat
 import java.io._
 
 /**
@@ -43,7 +46,7 @@ case class ECommAlgorithmParams(
 
 /**
  * an instance of this class is stored in the final model for each item that is used
- * in the learning process 
+ * in the learning process
  */
 case class ProductModel(
   item: Item, // the id of the item
@@ -51,6 +54,12 @@ case class ProductModel(
   count: Int // popular count for default score
   )
 
+/**
+ * rank: Int dimension of feature vectors,
+ * userFeatures: Map[Int, Array[Double]] feature vectors,
+ * productModels: Map[Int, ProductModel] id to product model map
+ * userObjects: Option[Map[Int,User]])
+ */
 class ECommModel(
     val rank: Int, // dimension of feature vectors
     val userFeatures: Map[Int, Array[Double]],
@@ -78,10 +87,10 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       s"viewEvents in PreparedData cannot be empty." +
         " Please check if DataSource generates TrainingData" +
         " and Preprator generates PreparedData correctly.")
-    require(!data.users.take(1).isEmpty,
-      s"users in PreparedData cannot be empty." +
-        " Please check if DataSource generates TrainingData" +
-        " and Preprator generates PreparedData correctly.")
+    //    require(!data.users.take(1).isEmpty,
+    //      s"users in PreparedData cannot be empty." +
+    //        " Please check if DataSource generates TrainingData" +
+    //        " and Preprator generates PreparedData correctly.")
     require(!data.items.take(1).isEmpty,
       s"items in PreparedData cannot be empty." +
         " Please check if DataSource generates TrainingData" +
@@ -132,7 +141,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     // get the map Int -> User for model
     val userObjects = data.users.collect().toMap
 
-//    val retVal = exportForClustering(productModels)
+    //    val retVal = exportForClustering(productModels)
 
     new ECommModel(
       rank = m.rank,
@@ -207,8 +216,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     viewCountsRDD.collectAsMap.toMap
   }
 
-  
-  /** the main prediction method, entry point for incoming queries from engine
+  /**
+   * the main prediction method, entry point for incoming queries from engine
    * ! do not rename -- predictionIO framework specific name !
    * here it is just decided whether to return standard recommendations for a specific user
    * or return item suggestions based on clustering result
@@ -216,73 +225,88 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   def predict(model: ECommModel, query: Query): PredictedResult = {
 
     logger.info("************** NEW QUERY **************")
-    
+    val today = Calendar.getInstance().getTime()
+    val beginTime = System.currentTimeMillis()
+    val dateformat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    val timestring = dateformat.format(today)
+    logger.info("request arrived at " + timestring)
+
     val method: String = query.method
 
     var predictedResult = new PredictedResult(null)
     method match {
       // if the method in query equals "recommend" then go into the template's standard
       // recommendation procedure
-      case "recommend" => predictedResult = getRecommendations( model, query )
+      case "recommend" => predictedResult = getRecommendations(model, query)
       // if the method in query equals "cluster" then go into clustering methods and return
       // outfit suggestions based on clustering result
-      case "cluster" => predictedResult = getOnboardingSuggestions( model, query )
+      case "cluster" => {
+        val sc: SparkContext = new SparkContext()
+        predictedResult = getOnboardingSuggestions(model, query, sc)
+      }
     }
-    logger.info("prediction done")
+
+    val endTime = System.currentTimeMillis()
+    val predictDuration = endTime - beginTime
+
+    logger.info("prediction done -- duration: " + predictDuration.toString() + "ms")
     predictedResult
   }
-  
+
   /**
    * compute item suggestions for the on-boarding approach for unknown user based on clustering
    * results
    */
-  def getOnboardingSuggestions( model: ECommModel, query: Query ):
-  PredictedResult = {
-    
+  def getOnboardingSuggestions(model: ECommModel, query: Query, sc: SparkContext): PredictedResult = {
+
     // first, get the input data for the clustering algorithm, i.e. the top liked items
     // of the specified time span which are contained in the model
-    val nrItems: Int = 2000
+    val nrItems: Int = 10000
     val daysBack: Long = 60L
     val maxIterations = 40
     val numClusters = query.numberOfClusters.getOrElse(10)
-    
-    logger.info("computing " + nrItems.toString() + " most liked items of last " +
-       daysBack.toString() + "days for cluster input")
-    
-    // get the top items for clustering input
-    val sc: SparkContext = new SparkContext()
-    val topsForClustering: RDD[(Int, ProductModel)] = computeTopsForClustering(sc, model, daysBack, nrItems )
-    // calculate the map itemID -> #likes
-    val itemToCountRDD: RDD[(Int,Int)] = topsForClustering.map{ case ( id, pm ) => ( id, pm.count ) }
 
-    val itemToClusterRDD: RDD[(Int,Int)] = runClusterAlgorithm(sc, topsForClustering, maxIterations, numClusters )
-    
-    val returnCluster = query.returnCluster.getOrElse(-1)
-    
-    val itemToCountMap = itemToCountRDD.collect().toMap
-    val itemToClusterMap = itemToClusterRDD.collect().toMap
-    
+    logger.info("computing " + nrItems.toString() + " most liked items of last " +
+      daysBack.toString() + " days for cluster input")
+
+    // get the top items for clustering input
+    //    val conf = new SparkConf().setMaster("spark://localhost:7077").setAppName("test-cluster-app")
+    //    val sc: SparkContext = new SparkContext()
+    val topsForClustering: RDD[(Int, ProductModel)] = computeTopsForClustering(sc, model, daysBack, nrItems)
+    // calculate the map itemID -> #likes
+    val itemToCountRDD: RDD[(Int, Int)] = topsForClustering.map { case (id, pm) => (id, pm.count) }
+
     var itemClusters: Array[ItemScore] = Array()
-    if ( returnCluster < 0 ) {
-      logger.info("no cluster specified, calculating over all clusters")
-      itemClusters = collectOverAllClusters( itemToClusterRDD, itemToCountRDD, query )
-      
-    } else {
-      logger.info("returning only from cluster " + returnCluster.toString() + ", num to return: " + query.num.toString())
-      itemClusters = collectFromSpecificCluster( itemToClusterRDD, itemToCountRDD, query )
+
+    if (topsForClustering.count() > 0) {
+
+      val itemToClusterRDD: RDD[(Int, Int)] = runClusterAlgorithm(sc, topsForClustering, maxIterations, numClusters)
+
+      val returnCluster = query.returnCluster.getOrElse(-1)
+
+      val itemToCountMap = itemToCountRDD.collect().toMap
+      val itemToClusterMap = itemToClusterRDD.collect().toMap
+
+      if (returnCluster < 0) {
+        logger.info("no cluster specified, calculating over all clusters")
+        itemClusters = collectOverAllClusters(itemToClusterRDD, itemToCountRDD, query)
+
+      } else {
+        logger.info("returning only from cluster " + returnCluster.toString() + ", num to return: " + query.num.toString())
+        itemClusters = collectFromSpecificCluster(itemToClusterRDD, itemToCountRDD, query)
+      }
+
     }
-    
     sc.stop()
     new PredictedResult(itemClusters.toArray)
   }
-  
+
   /**
    * compute recommendations for a specific user based on e-commerce recommendation template's
    * standard approach.
    */
-  def getRecommendations( model: ECommModel, query: Query ):
-  PredictedResult = {
-    
+  def getRecommendations(model: ECommModel, query: Query): PredictedResult = {
+
     val userFeatures = model.userFeatures
     val productModels = model.productModels
     val userObjects = model.userObjects.get
@@ -361,9 +385,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val predictedResult = new PredictedResult(itemScores)
     predictedResult
   }
-  
-  
-  
 
   /** Generate final blackList based on other constraints */
   def genBlackList(query: Query): Set[Int] = {
@@ -437,6 +458,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   /** Get recent events of the user on items for recommending similar items */
   def getRecentItems(query: Query, limit: Int): Set[Int] = {
     // get latest 10 user view item events
+
+    logger.info("get recent items for user " + query.user.get.toString())
     val recentEvents = try {
       LEventStore.findByEntity(
         appName = ap.appName,
@@ -469,6 +492,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         }
       }
     }.toSet
+
+    logger.info("found " + recentItems.size.toString() + " recently viewed items by unknown user")
 
     recentItems
   }
@@ -537,12 +562,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     // filter the userModels that result from users that are in the trained model w.r.t. the
     // ids that are in the userObjects
     val containedUsers = userModels.par.filter { case (id, a) => userObjects.contains(id) }
-    // filter the remaining user to be the users that have liked something since queryStartTime
+    logger.info("first filtering --> containedUsers length = " + containedUsers.size.toString())
+    // filter the remaining users to be the users that have liked something since queryStartTime
     val filteredUserModels = containedUsers.par.filter {
       case (id, a) => userObjects.get(id).get.lastViewEventDate.get >= queryStartTime
     }
 
-    logger.info("filtered size = " + filteredUserModels.size.toString())
+    logger.info("remaining users after filtering for startTime: " + filteredUserModels.size.toString())
 
     // first find the most similar users to the user in query, therefore 
     // calculate the cosine similarity score between the user feature and the features
@@ -616,7 +642,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       }
 
       // filter the resulting seen items of the current similar user
-      // w.r.t. 
+      // filtering is done by isCandidateItem --> only items are considered
+      // who have been uploaded since queryStartTime
       val filteredItems = seenItems.par.filter {
         case (id) => productModels.contains(id) &&
           isCandidateItem(
@@ -748,6 +775,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     whiteList: Option[Set[Int]],
     blackList: Set[Int]): Array[(Int, Double)] = {
 
+    logger.info("predict similar items for user " + query.user.get.toString())
+    logger.info("start time: " + query.startTime.getOrElse("nothing").toString())
     val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
       .filter {
         case (i, pm) =>
@@ -769,13 +798,15 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           // may customize here to further adjust score
           (i, s)
       }
-      .filter(_._2 > 0) // keep items with score > 0
+      //      .filter(_._2 > 0) // keep items with score > 0
       .seq // convert back to sequential collection
 
     // reverse means order from highest to lowest
     // cosine similarity s is in [-1,1], meaning 1 the vectors are the same, -1 opposite
     val ord = Ordering.by[(Int, Double), Double](_._2).reverse
     val topScores = getTopN(indexScores, query.num)(ord).toArray
+
+    logger.info("returning " + topScores.length.toString() + " items")
 
     topScores
   }
@@ -897,84 +928,77 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     topScores
   }
 
-  
   private def exportForClustering(
-    tops: RDD[(Int,ProductModel)]) =
+    tops: RDD[(Int, ProductModel)]) =
     {
-      val topsArray: Array[(Int,ProductModel)] = tops.collect()
-      writeTopItemsToFile( topsArray )    
+      val topsArray: Array[(Int, ProductModel)] = tops.collect()
+      writeTopItemsToFile(topsArray)
     }
 
-  def writeTopItemsToFile( array: Array[(Int,ProductModel)] )
-  {
-//    val writer = new BufferedWriter( new FileWriter( new File("/home/andre/RecommendationEngine/Data/Artificial/IntIds/10Users/testdata.json")))
-    val writer = new BufferedWriter( new FileWriter( new File("/home/andre/Data/FFXData/featureVectorsForCluster.json")))
-    
-    val part1 : String = "{\"event\":\"$set\",\"entityType\":\"item\",\"entityId\":\""
-    val part2 : String = "\",\"properties\":{\"feature\":\""
-    val part3 : String = "\",\"count\":\""
-    val part4 : String = "\"}}"
-    
-    for ( i <- 0 to array.length-1 ) {
+  def writeTopItemsToFile(array: Array[(Int, ProductModel)]) {
+        val writer = new BufferedWriter( new FileWriter( new File("/home/andre/RecommendationEngine/Data/Artificial/IntIds/10Users/testdata.json")))
+//    val writer = new BufferedWriter(new FileWriter(new File("/home/andre/Data/FFXData/featureVectorsForCluster.json")))
+
+    val part1: String = "{\"event\":\"$set\",\"entityType\":\"item\",\"entityId\":\""
+    val part2: String = "\",\"properties\":{\"feature\":\""
+    val part3: String = "\",\"count\":\""
+    val part4: String = "\"}}"
+
+    for (i <- 0 to array.length - 1) {
       val id = array(i)._1
       val f = array(i)._2.features.get
       var fstring: String = ""
-      for ( j <- 0 to f.length-1 ) {
-        
-        
+      for (j <- 0 to f.length - 1) {
+
         fstring = fstring + (f(j).toString())
-        if ( j < f.length-1 ) {
+        if (j < f.length - 1) {
           fstring = fstring + ","
         }
       }
 
       var cString = array(i)._2.count.toString()
-      
-      var s : String = part1 + id.toString() + part2 + fstring + part3 + cString + part4 
-      writer.write(s+"\n")
+
+      var s: String = part1 + id.toString() + part2 + fstring + part3 + cString + part4
+      writer.write(s + "\n")
     }
-      writer.close()
+    writer.close()
   }
- 
-  
-  
+
   //===========================================================================================  
   //===========================================================================================
   // CLUSTER HELPER
   //===========================================================================================
   //===========================================================================================
-  
+
   /**
    * returns the top n items sorted by number of likes (count parameter) that are contained in
    * the current model
    */
-  private def computeTopsForClustering(sc: SparkContext, model: ECommModel, daysBack: Long, maxNum: Int ):
-  RDD[(Int,ProductModel)] = {
-    
+  private def computeTopsForClustering(sc: SparkContext, model: ECommModel, daysBack: Long, maxNum: Int): RDD[(Int, ProductModel)] = {
+
     val timeBack = daysBack * 24L * 60L * 60L * 1000L
     val now: Long = System.currentTimeMillis()
     val d: Long = now - timeBack
 
-    val pmsArray: Array[(Int,ProductModel)] = model.productModels.toArray
+    val pmsArray: Array[(Int, ProductModel)] = model.productModels.toArray
     val recent = pmsArray.filter { case (id, pm) => pm.item.setTime >= d }
     val recentArray = recent.toArray
-    
+
     logger.info("going into sort")
     // sort remaining product models w.r.t. counts
-    Sorting.quickSort(recentArray)(Ordering.by[ (Int,ProductModel), Int ](_._2.count).reverse)
+    Sorting.quickSort(recentArray)(Ordering.by[(Int, ProductModel), Int](_._2.count).reverse)
     val topArray = recentArray.slice(0, maxNum)
 
-    
-    val topsRDD: RDD[(Int,ProductModel)] = sc.parallelize( topArray )
+    val topsRDD: RDD[(Int, ProductModel)] = sc.parallelize(topArray)
     logger.info("tops rdd size: " + topsRDD.count().toString)
-    
-    logger.info("exporting tops to file ...")
-    exportForClustering(topsRDD)
-    logger.info("  ... done")
-    
+
+//        logger.info("exporting tops to file ...")
+//        exportForClustering(topsRDD)
+//        logger.info("  ... done")
+
     topsRDD
   }
-  
+
   /**
    * this method runs spark's MLlib k-means clustering algorithm
    * INPUT:
@@ -982,148 +1006,139 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    * maxIterations: number of iterations of cluster algorithm
    * numClusters: number of clusters the top items should be devided in
    */
-  private def runClusterAlgorithm(sc: SparkContext, topsForClustering: RDD[(Int, ProductModel)], maxIterations: Int, numClusters: Int ):
-  RDD[(Int,Int)] = {
-    
+  private def runClusterAlgorithm(sc: SparkContext, topsForClustering: RDD[(Int, ProductModel)], maxIterations: Int, numClusters: Int): RDD[(Int, Int)] = {
+
     // extract the features and the count maps
-    val dataRDD: RDD[(Int,Array[Double])] = topsForClustering.map{ case ( id, pm ) => ( id, pm.features.get ) }
+    val dataRDD: RDD[(Int, Array[Double])] = topsForClustering.map { case (id, pm) => (id, pm.features.get) }
     val dataArray = dataRDD.collect()
-    
+
     logger.info("dataArray size: " + dataArray.size.toString())
-    
-    val idArray = dataArray.map( x => x._1 )
-    val featureArray = dataArray.map( x => x._2 )
-    
+
+    val idArray = dataArray.map(x => x._1)
+    val featureArray = dataArray.map(x => x._2)
+
     // get only the features as vector
     val vectorOfFeatures = featureArray.toVector
-    
+
     val featuresRDD = sc.parallelize(vectorOfFeatures.map { x => Vectors.dense(x) })
-    
+
     val startKMeans = System.currentTimeMillis()
 
     logger.info("running KMeans with " + numClusters.toString() + " clusters and " + maxIterations.toString() + " iterations")
     val clusters = KMeans.train(featuresRDD, numClusters, maxIterations)
-    
+
     val endKMeans = System.currentTimeMillis()
-    val durationKMeans = endKMeans-startKMeans
+    val durationKMeans = endKMeans - startKMeans
     logger.info("duration of KMeans: " + durationKMeans.toString() + "ms")
-    
+
     val p = clusters.predict(featuresRDD).collect()
-    
-    var itemToClusterMap: Map[Int,Int] = Map()
-    
-    for ( i <- 0 to p.length-1 ) {
-      itemToClusterMap = itemToClusterMap.+( ( idArray(i), p(i)+1 ) )
+
+    var itemToClusterMap: Map[Int, Int] = Map()
+
+    for (i <- 0 to p.length - 1) {
+      itemToClusterMap = itemToClusterMap.+((idArray(i), p(i) + 1))
     }
 
-    val itemToClusterArray: Array[(Int,Int)] = itemToClusterMap.toArray
-    val returnRDD: RDD[(Int,Int)] = sc.parallelize(itemToClusterArray)
-    
+    val itemToClusterArray: Array[(Int, Int)] = itemToClusterMap.toArray
+    val returnRDD: RDD[(Int, Int)] = sc.parallelize(itemToClusterArray)
+
     returnRDD
   }
-  
-  
-  private def collectOverAllClusters( itemToClusterRDD: RDD[(Int,Int)], itemToCountRDD: RDD[(Int,Int)], query: Query ):
-  Array[ItemScore] = {
+
+  private def collectOverAllClusters(itemToClusterRDD: RDD[(Int, Int)], itemToCountRDD: RDD[(Int, Int)], query: Query): Array[ItemScore] = {
     val totalNum = query.num
-    
-    val clusterIDArray = itemToClusterRDD.map{ case ( itemid, clusterid ) => clusterid }.collect().distinct
+
+    val clusterIDArray = itemToClusterRDD.map { case (itemid, clusterid) => clusterid }.collect().distinct
     val nrClusters = clusterIDArray.length
-    
+
     val itemToCountMap = itemToCountRDD.collect().toMap
     val itemToClusterMap = itemToClusterRDD.collect().toMap
-    
+
     logger.info("available cluster ids: ")
-    for ( i <- 0 to nrClusters-1 ) {
+    for (i <- 0 to nrClusters - 1) {
       logger.info(clusterIDArray(i).toString())
     }
-    
-    val numPerCluster: Int = math.ceil(totalNum.toDouble/nrClusters.toDouble).toInt
+
+    val numPerCluster: Int = math.ceil(totalNum.toDouble / nrClusters.toDouble).toInt
     // for each cluster now get the n (from query) top items
     var finalIds: Array[Int] = Array.emptyIntArray
-    for ( i <- 0 to nrClusters-1 ) {
+    for (i <- 0 to nrClusters - 1) {
       val clusterid = clusterIDArray(i)
-      val currentClustersIDs = itemToClusterRDD.filter( _._2 == clusterid )
-      
-      logger.info("num in cluster " + clusterid.toString() + ": " + currentClustersIDs.count().toString() + "/" + numPerCluster.toString() )
-      
+      val currentClustersIDs = itemToClusterRDD.filter(_._2 == clusterid)
+
+      logger.info("num in cluster " + clusterid.toString() + ": " + currentClustersIDs.count().toString() + "/" + numPerCluster.toString())
+
       // sort these items w.r.t. count and get top n
-      val itemIdsCountArray: Array[(Int,Int)] = currentClustersIDs.collect()
-        .map{ case ( itemid,clusterid ) => ( itemid, itemToCountMap.get(itemid).get )  }
-//        .map{ case ( itemid,clusterid ) => ( itemid, itemToCountRDD.filter( _._1 ) )  }
-      
-      Sorting.quickSort(itemIdsCountArray)(Ordering.by[ (Int,Int), Int ](_._2).reverse)
-      val topArray: Array[Int] = itemIdsCountArray.slice(0,numPerCluster).map{ case ( id, c ) => id }
-      finalIds = finalIds ++ topArray 
+      val itemIdsCountArray: Array[(Int, Int)] = currentClustersIDs.collect()
+        .map { case (itemid, clusterid) => (itemid, itemToCountMap.get(itemid).get) }
+      //        .map{ case ( itemid,clusterid ) => ( itemid, itemToCountRDD.filter( _._1 ) )  }
+
+      Sorting.quickSort(itemIdsCountArray)(Ordering.by[(Int, Int), Int](_._2).reverse)
+      val topArray: Array[Int] = itemIdsCountArray.slice(0, numPerCluster).map { case (id, c) => id }
+      finalIds = finalIds ++ topArray
     }
 
-    finalIds = finalIds.slice( 0, totalNum )
-    
+    finalIds = finalIds.slice(0, totalNum)
+
     // if number of items is not enough, add additional items
     val idSet = finalIds.toSet.seq
-    if ( finalIds.length < totalNum ) {
+    if (finalIds.length < totalNum) {
       val allIDs = itemToClusterMap.keySet
       val remainingIDs = allIDs.filterNot { x => idSet.contains(x) }.toArray
-      
-      val remainingCounts = remainingIDs.map { itemID => ( itemID, itemToCountMap.get(itemID).get ) }
-      Sorting.quickSort(remainingCounts)(Ordering.by[ (Int,Int), Int ](_._2).reverse)
+
+      val remainingCounts = remainingIDs.map { itemID => (itemID, itemToCountMap.get(itemID).get) }
+      Sorting.quickSort(remainingCounts)(Ordering.by[(Int, Int), Int](_._2).reverse)
       val additionalCounts = remainingCounts.slice(0, totalNum - finalIds.length)
-      
+
       // get the ids
-      val additionalIds = additionalCounts.map( x => x._1 )
-      
+      val additionalIds = additionalCounts.map(x => x._1)
+
       finalIds = finalIds ++ additionalIds
     }
-    
-      // mix the resulting ids randomly
-    finalIds = shuffle( finalIds )
-    
+
+    // mix the resulting ids randomly
+    finalIds = shuffle(finalIds)
+
     // finally create the return object
-    val itemClusters = finalIds.map{
-      itemid => 
-      new ItemScore(
-        item = itemid,
-        score = itemToCountMap.get( itemid ).get.toDouble,
-        cluster = Some(itemToClusterMap.get(itemid).getOrElse(0))
-      )
+    val itemClusters = finalIds.map {
+      itemid =>
+        new ItemScore(
+          item = itemid,
+          score = itemToCountMap.get(itemid).get.toDouble,
+          cluster = Some(itemToClusterMap.get(itemid).getOrElse(0)))
     }
     itemClusters
   }
-  
-  
-  def collectFromSpecificCluster( itemToClusterRDD: RDD[(Int,Int)], itemToCountRDD: RDD[(Int,Int)], query: Query ):
-  Array[ItemScore] = {
-    
+
+  def collectFromSpecificCluster(itemToClusterRDD: RDD[(Int, Int)], itemToCountRDD: RDD[(Int, Int)], query: Query): Array[ItemScore] = {
+
     val totalNum = query.num
     val returnCluster = query.returnCluster.get
-   
+
     val itemToClusterMap = itemToClusterRDD.collect().toMap
     val itemToCountMap = itemToCountRDD.collect().toMap
-    
+
     // filter all items w.r.t desired cluster number
-    val clustersItems = itemToClusterMap.filter( x => x._2 == returnCluster ).toArray
+    val clustersItems = itemToClusterMap.filter(x => x._2 == returnCluster).toArray
     logger.info("number of items in cluster " + returnCluster.toString() + ": " + clustersItems.length.toString())
-    logger.info("query amount: " + totalNum.toString() )
+    logger.info("query amount: " + totalNum.toString())
     // sort these items w.r.t. count and get top n
-    val itemIdsCountArray: Array[(Int,Int)] = clustersItems
-      .map{ case ( itemid,clusterid ) => ( itemid, itemToCountMap.get(itemid).get )  }
-    
-    Sorting.quickSort(itemIdsCountArray)(Ordering.by[ (Int,Int), Int ](_._2).reverse)
-    val topArray: Array[Int] = itemIdsCountArray.slice(0,totalNum).map{ case ( id, c ) => id }
-    
+    val itemIdsCountArray: Array[(Int, Int)] = clustersItems
+      .map { case (itemid, clusterid) => (itemid, itemToCountMap.get(itemid).get) }
+
+    Sorting.quickSort(itemIdsCountArray)(Ordering.by[(Int, Int), Int](_._2).reverse)
+    val topArray: Array[Int] = itemIdsCountArray.slice(0, totalNum).map { case (id, c) => id }
+
     // finally create the return object
-     // finally create the return object
-    val itemClusters = topArray.map{
-      itemid => 
-      new ItemScore(
-        item = itemid,
-        score = itemToCountMap.get( itemid ).get.toDouble,
-        cluster = Some(itemToClusterMap.get(itemid).getOrElse(0))
-      )
+    // finally create the return object
+    val itemClusters = topArray.map {
+      itemid =>
+        new ItemScore(
+          item = itemid,
+          score = itemToCountMap.get(itemid).get.toDouble,
+          cluster = Some(itemToClusterMap.get(itemid).getOrElse(0)))
     }
     itemClusters
   }
-  
-  
-  
+
 }

@@ -44,11 +44,7 @@ class DataSource(val dsp: DataSourceParams)
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD, minTimeTrain )
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD, minTimeTrain )
     
-//    logger.info("number of view events: " + viewEventsRDD.count().toString())
-//    logger.info("number of buy  events: " + buyEventsRDD.count().toString())
-    
     val itemSetTimes: RDD[(Int,Long)] = getItemSetTimes(sc, "item")
-//    val itemSetTimes: RDD[(Int,DateTime)] = getItemSetTimes(sc, "item")
     val itemsRDD: RDD[(Int, Item)] = getItems( sc, itemSetTimes )
     val usersRDD: RDD[(Int, User)] = getUsers( sc )
     
@@ -66,7 +62,6 @@ class DataSource(val dsp: DataSourceParams)
       buyEvents = buyEventsRDD
     )
   }
-  
   
   override
   def readEval(sc: SparkContext) 
@@ -203,74 +198,41 @@ class DataSource(val dsp: DataSourceParams)
   }
   
   /**
-   * get the users  
+   * get the users. Unlike in the original template, where the EventStore was searched
+   * for user set events, here all view events are considered and for each user id
+   * these events are aggregated to obtain a map userID --> latestViewEvent time stamp.
+   * This is then stored in a user object. Thus we are able to know when the user's
+   * last view event happened, i.e. in a sense if the user is an active user
    */
   def getUsers(sc: SparkContext): RDD[(Int, User)] =
   {
      val cacheEvents = false
-    
+     
+     // search the event store for view events and keep the user ids and the time stamp
+     // of the view event
      val v: RDD[(Int,Long)]  = PEventStore.find(
        appName = dsp.appName,
        entityType = Some("user"),
        eventNames = Some(List("view"))
        )(sc).map{case viewevent => ( viewevent.entityId.toInt, viewevent.eventTime.getMillis )}
    
-//     val v2  = PEventStore.find(
-//       appName = dsp.appName,
-//       entityType = Some("user"),
-//       eventNames = Some(List("view"))
-//       )(sc)
-//     
-//     val bla = v2.collect()
-//     for ( i <- 0 to bla.size-1 ) {
-//       val blupp = bla.apply(i)
-//       val uid = blupp.entityId
-//       val iid = blupp.targetEntityId
-//       val t = blupp.eventTime.getMillis
-//       val dt = new DateTime()
-//       dt.withMillis(t)
-//       logger.info("u = " + uid.toString() + " i = " + iid.toString() + " t = " + t.toString())
-//     }
-//     
+     
+     // get an RDD containing unique ids and the corresponding time stamps
      val aggregatedDates = v.groupByKey
      
-//     logger.info("aggregatedDates:")
-//     val tmp = aggregatedDates.collect()
-//     for ( i <- 0 to aggregatedDates.count().toInt-1 ) {
-//       val bla = tmp.apply(i)
-//       val id = bla._1
-//       val iter = bla._2.iterator
-//       logger.info("id = " + id.toString())
-//       while ( iter.hasNext ) {
-//         val d = new DateTime()
-//         d.withMillis(iter.next())
-//         logger.info(d.toDateTime().toString())
-//       }
-  
-//     }
-     
+     // keep only the lastest view event times
      val maxDates = aggregatedDates.map{ case ( id, iter ) => ( id, iter.toArray.reduceLeft( _ max _ ) ) }
      
      val datesMap = maxDates.collectAsMap()
-     
-    // create a RDD of (entityID, User)
-    val usersRDD: RDD[(Int, User)] = PEventStore.aggregateProperties(
-      appName = dsp.appName,
-      entityType = "user"
-    )(sc).map { case (entityId, properties) =>
-      val user = try {
-//         User(None)
-        User( datesMap.get(entityId.toInt).orElse(Some(0)) )
-//        User( datesMap.get(entityId.toInt) )
-      } catch {
-        case e: Exception => {
-          logger.error(s"Failed to get properties ${properties} of" +
-            s" user ${entityId}. Exception: ${e}.")
-          throw e
-        }
-      }
-      (entityId.toInt, user)
+
+    val datesArray = datesMap.toArray
+
+    // create an array of ids and User objects containing the corresponding time stamp
+    val usersArray = datesArray.map{ case ( id, t ) =>
+      ( id, User( Some(t) ) )
     }
+    
+    val usersRDD = sc.parallelize(usersArray)
     
     usersRDD
   }
