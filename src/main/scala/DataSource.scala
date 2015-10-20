@@ -39,9 +39,10 @@ class DataSource(val dsp: DataSourceParams)
     }
     
     val minTimeTrain: Long = new DateTime(dsp.startTimeTrain).getMillis
-    logger.info("Preparing training data with view events not older than " + dsp.startTimeTrain)
+    logger.info("Preparing training data with view, like and buy events not older than " + dsp.startTimeTrain)
     
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents( eventsRDD, minTimeTrain )
+    val likeEventsRDD: RDD[LikeEvent] = getLikeEvents( eventsRDD, minTimeTrain )
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents( eventsRDD, minTimeTrain )
     
     val itemSetTimes: RDD[(Int,Long)] = getItemSetTimes(sc, "item")
@@ -52,15 +53,22 @@ class DataSource(val dsp: DataSourceParams)
       usersRDD.cache()
       itemsRDD.cache()
       viewEventsRDD.cache()
+      likeEventsRDD.cache()
       buyEventsRDD.cache()
     }
     
-    new TrainingData(
+    val td: TrainingData = new TrainingData(
       users = usersRDD,
       items = itemsRDD,
       viewEvents = viewEventsRDD,
+      likeEvents = likeEventsRDD,
       buyEvents = buyEventsRDD
     )
+    
+//    logger.info("Training data contains: ")
+//    logger.info(td.toString())
+    
+    td
   }
   
   override
@@ -76,32 +84,32 @@ class DataSource(val dsp: DataSourceParams)
     
     // get the view events
     val viewEvts: RDD[ViewEvent] = getViewEvents( allEvents, 0L )
+    val likeEvts: RDD[LikeEvent] = getLikeEvents( allEvents, 0L ) 
     val buyEvts: RDD[BuyEvent] = getBuyEvents( allEvents, 0L )
     val usrsRDD: RDD[(Int, User)] = getUsers( sc )
     val itmsRDD: RDD[(Int, Item)] = getItems( sc )
 
     
     val views: RDD[(ViewEvent, Long)] = viewEvts.zipWithUniqueId
+    val likes: RDD[(LikeEvent, Long)] = likeEvts.zipWithUniqueId
     val buys: RDD[(BuyEvent, Long)] = buyEvts.zipWithUniqueId
     
-    logger.info("views number of views = " + views.count().toString())
-    logger.info("number of buys = " + buys.count().toString())
-    logger.info("number of users = " + usrsRDD.count().toString())
-    logger.info("number of items = " + itmsRDD.count().toString())
-    
+
     ( 0 until kFold ).map { idx => {
       // take (kFold-1) view out kFold views as training sample
       val trainingViews = views.filter( _._2 % kFold != idx  ).map(_._1)
+      val trainingLikes = likes.filter( _._2 % kFold != idx  ).map(_._1)
       val trainingBuys = buys.filter( _._2 % kFold != idx ).map( _._1 )
 
       // take each kFold-th view as test samples
       val testingViews = views.filter(_._2 % kFold == idx ).map(_._1)
+      val testingLikes = likes.filter(_._2 % kFold == idx ).map(_._1)
       val testingUsers: RDD[( Int, Iterable[ViewEvent] )] = testingViews.groupBy( _.user )
 
       val testUserIdsRDD = testingUsers.map{ case( id, v ) => id }
       val testUserIdsArray = testUserIdsRDD.collect()
       
-      ( new TrainingData( usrsRDD, itmsRDD, trainingViews, trainingBuys ),
+      ( new TrainingData( usrsRDD, itmsRDD, trainingViews, trainingLikes, trainingBuys ),
         new EmptyEvaluationInfo(),
         testingUsers.map {
           case ( user, viewevents ) => ( Query( "recom", evalParams.queryNum, Some(user), None, None, None, None, None, None ), 
@@ -121,7 +129,7 @@ class DataSource(val dsp: DataSourceParams)
     val eventsRDD: RDD[Event] = PEventStore.find(
       appName = dsp.appName,
       entityType = Some("user"),
-      eventNames = Some(List("view", "buy")),
+      eventNames = Some(List("view", "buy", "like")),
       // targetEntityType is optional field of an event.
       targetEntityType = Some(Some("item")))(sc)
       eventsRDD
@@ -172,6 +180,31 @@ class DataSource(val dsp: DataSourceParams)
       viewEventsRDD
   }
   
+    /**
+   * This method gets all "view" events from all events
+   */
+  def getLikeEvents(allEvents: RDD[Event], minT: Long): RDD[LikeEvent] =
+  {
+      val likeEventsRDD: RDD[LikeEvent] = allEvents
+      .filter { event => event.event == "like" }
+      .map { event =>
+        try {
+          LikeEvent(
+            user = event.entityId.toInt,
+            item = event.targetEntityId.get.toInt,
+            t = event.eventTime.getMillis
+          )
+        } catch {
+          case e: Exception =>
+            logger.error(s"Cannot convert ${event} to LikeEvent." +
+              s" Exception: ${e}.")
+            throw e
+        }
+      }
+      .filter { _.t >= minT  }
+      likeEventsRDD
+  }
+  
   
   /**
    * this method returns all buy events contained in allEvents
@@ -213,8 +246,8 @@ class DataSource(val dsp: DataSourceParams)
      val v: RDD[(Int,Long)]  = PEventStore.find(
        appName = dsp.appName,
        entityType = Some("user"),
-       eventNames = Some(List("view"))
-       )(sc).map{case viewevent => ( viewevent.entityId.toInt, viewevent.eventTime.getMillis )}
+       eventNames = Some(List("like"))
+       )(sc).map{case likeevent => ( likeevent.entityId.toInt, likeevent.eventTime.getMillis )}
    
      
      // get an RDD containing unique ids and the corresponding time stamps
@@ -306,23 +339,39 @@ case class Item(
     setTime: Long
     )
 
-// object of class ViewEvent contains
-//  * the user id
-//  * the item id
-//  * the time stamp
-// and represents the event of when the user viewed (liked) the item
+/** object of class ViewEvent contains
+ * the user id
+ * the item id
+ * the time stamp
+ * and represents the event of when the user viewed the item,
+ * e.g. liked it (he has seen it), got recommended it
+ */
 case class ViewEvent(
     user: Int,
     item: Int,
     t: Long
     )
 
-// object of class ViewEvent contains
-//  * the user id
-//  * the item id
-//  * the time stamp
-// and represents the event of when the user bought the item
+/** object of class ViewEvent contains
+ * the user id
+ * the item id
+ * the time stamp
+ * and represents the event of when the user bought the item
+ */
 case class BuyEvent(
+    user: Int,
+    item: Int,
+    t: Long
+    )
+    
+/**
+ * object of class LikeEvent contains
+ * the user id
+ * the item id
+ * the time stamp
+ * and represents the event of when the user liked (favs) an item    
+ */
+case class LikeEvent(
     user: Int,
     item: Int,
     t: Long
@@ -332,12 +381,14 @@ class TrainingData(
   val users: RDD[(Int, User)],
   val items: RDD[(Int, Item)],
   val viewEvents: RDD[ViewEvent],
+  val likeEvents: RDD[LikeEvent],
   val buyEvents: RDD[BuyEvent]
 ) extends Serializable {
   override def toString = {
     s"users: [${users.count()} (${users.take(2).toList}...)]" +
     s"items: [${items.count()} (${items.take(2).toList}...)]" +
     s"viewEvents: [${viewEvents.count()}] (${viewEvents.take(2).toList}...)" +
+    s"likeEvents: [${likeEvents.count()}] (${likeEvents.take(2).toList}...)" +
     s"buyEvents: [${buyEvents.count()}] (${buyEvents.take(2).toList}...)"
   }
 }

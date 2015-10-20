@@ -10,7 +10,6 @@ import org.apache.spark.mllib.recommendation.{Rating => MLlibRating}
 
 import org.scalatest.junit.JUnitRunner
 import org.junit.runner.RunWith
-//import org.joda.time.DateTime
 
 @RunWith(classOf[JUnitRunner])
 class ECommAlgorithmTestTraining
@@ -23,8 +22,8 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 	val algorithmParams = new ECommAlgorithmParams(
 			appName = "test-app",
 			unseenOnly = true,
-			seenEvents = List("buy", "view"),
-			similarEvents = List("view"),
+			seenEvents = List("buy", "view", "like"),
+			similarEvents = List("like"),
 			rank = 10,
 			numIterations = 20,
 			lambda = 0.01,
@@ -80,6 +79,19 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 			ViewEvent(5, 5, 1000110)
 	)
 
+	 // create like events (userId,itemId,TimeStamp) ("user userId likes item itemId")
+	val like = Seq(
+			LikeEvent(1, 2, 1000010),
+			LikeEvent(1, 4, 1000020),
+			LikeEvent(2, 1, 1000030),
+  		LikeEvent(2, 3, 1000040),
+			LikeEvent(3, 1, 1000050),
+			LikeEvent(3, 4, 1000060),
+			LikeEvent(3, 5, 1000070),
+			LikeEvent(4, 1, 1000100),
+			LikeEvent(5, 5, 1000110)
+	)
+	
   // create buy events
 	val buy = None
 
@@ -100,6 +112,7 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 				users = sc.parallelize(users.toSeq),
 				items = sc.parallelize(items.toSeq),
 				viewEvents = sc.parallelize(view.toSeq),
+  			likeEvents = sc.parallelize(like.toSeq),
 				buyEvents = sc.parallelize(buy.toSeq)
 			)
 
@@ -228,6 +241,7 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 				users = sc.parallelize(users.toSeq),
 				items = sc.parallelize(items.toSeq),
 				viewEvents = sc.parallelize(view.toSeq),
+				likeEvents = sc.parallelize(like.toSeq),
 				buyEvents = sc.parallelize(buy.toSeq)
 		)
     
@@ -258,12 +272,6 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 
 //======================================================================================================
 //======================================================================================================
-  
 
-//	def addToLog( info : String )
-//	{
-//		val filetowrite = "/home/andre/RecommendationEngine/Engines/TestStringInt/TestInt/IntVariant/TestLog.txt"
-//				scala.tools.nsc.io.File(filetowrite).appendAll(info)
-//	}
 
 }

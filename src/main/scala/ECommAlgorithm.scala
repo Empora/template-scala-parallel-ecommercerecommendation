@@ -83,14 +83,10 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   @transient lazy val logger = Logger[this.type]
 
   def train(sc: SparkContext, data: PreparedData): ECommModel = {
-    require(!data.viewEvents.take(1).isEmpty,
-      s"viewEvents in PreparedData cannot be empty." +
+    require(!data.likeEvents.take(1).isEmpty,
+      s"likeEvents in PreparedData cannot be empty." +
         " Please check if DataSource generates TrainingData" +
         " and Preprator generates PreparedData correctly.")
-    //    require(!data.users.take(1).isEmpty,
-    //      s"users in PreparedData cannot be empty." +
-    //        " Please check if DataSource generates TrainingData" +
-    //        " and Preprator generates PreparedData correctly.")
     require(!data.items.take(1).isEmpty,
       s"items in PreparedData cannot be empty." +
         " Please check if DataSource generates TrainingData" +
@@ -124,7 +120,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val productFeatures: Map[Int, (Item, Option[Array[Double]])] =
       items.leftOuterJoin(m.productFeatures).collectAsMap.toMap
 
-    val popularCount = trainDefaultViews(data)
+//    val popularCount = trainDefaultViews(data)
+    val popularCount = trainDefaultLikes(data)
     //    val popularCount = trainDefault(data)
 
     val productModels: Map[Int, ProductModel] = productFeatures
@@ -156,9 +153,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    */
   def genMLlibRating(data: PreparedData): RDD[MLlibRating] = {
 
-    logger.info(s"Getting mllib ratings from viewEvents: number of partitions: ${data.viewEvents.partitions.size}")
+    logger.info(s"Getting mllib ratings from likeEvents: number of partitions: ${data.likeEvents.partitions.size}")
 
-    val mllibRatings = data.viewEvents
+    val mllibRatings = data.likeEvents
       .map { r =>
         // get user and item Int IDs for MLlib
         val uindex = r.user
@@ -216,6 +213,21 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     viewCountsRDD.collectAsMap.toMap
   }
 
+  def trainDefaultLikes(
+    data: PreparedData): Map[Int, Int] = {
+    val likeCountsRDD: RDD[(Int, Int)] = data.likeEvents
+      .map { r =>
+        // Convert user and item String IDs to Int index
+        val uindex = r.user
+        val iindex = r.item
+        (uindex, iindex, 1)
+      }
+      .map { case (u, i, v) => (i, 1) } // key is item
+      .reduceByKey { case (a, b) => a + b } // count number of items occurrence
+
+    likeCountsRDD.collectAsMap.toMap
+  }
+  
   /**
    * the main prediction method, entry point for incoming queries from engine
    * ! do not rename -- predictionIO framework specific name !
@@ -261,7 +273,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     // first, get the input data for the clustering algorithm, i.e. the top liked items
     // of the specified time span which are contained in the model
-    val nrItems: Int = 10000
+    val nrItems: Int = 2000
     val daysBack: Long = 60L
     val maxIterations = 40
     val numClusters = query.numberOfClusters.getOrElse(10)
@@ -415,7 +427,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         try {
           event.targetEntityId.get.toInt
         } catch {
-          case e => {
+          case e: Throwable => {
             logger.error(s"Can't get targetEntityId of event ${event}.")
             throw e
           }
@@ -486,7 +498,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       try {
         event.targetEntityId.get.toInt
       } catch {
-        case e => {
+        case e: Throwable => {
           logger.error("Can't get targetEntityId of event ${event}.")
           throw e
         }
@@ -577,7 +589,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val userScores: Map[Int, Double] = filteredUserModels.seq
       .map { case (userid, featurevector) => (userid, cosine(featurevector, userFeature)) }
     // define the number of user from which the items are taken
-    // TODO do not define it, instead take as much users as are necessary to get query.num items
     val numUsers: Int = userScores.size
 
     // reverse means order from highest to lowest
@@ -608,8 +619,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       iterCount = iterCount + 1
 
       val seenItems: Set[Int] = {
-        // get all user item events which are considered as "seen" events
 
+        // get all user item events which are considered as "seen" events
         val seenEvents: Iterator[Event] = try {
           LEventStore.findByEntity(
             appName = ap.appName,
@@ -633,7 +644,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           try {
             event.targetEntityId.get.toInt
           } catch {
-            case e => {
+            case e: Throwable => {
               logger.error(s"Can't get targetEntityId of event ${event}.")
               throw e
             }
@@ -655,9 +666,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
             blackList = blackList)
       }
 
-      //      logger.info("filteredItems = " + filteredItems.seq.toString())
+      // logger.info("filteredItems = " + filteredItems.seq.toString())
       itemCount = itemCount + filteredItems.seq.size
-      //      logger.info("items at iteration " + iterCount.toString() + ": " + itemCount.toString())
+      // logger.info("items at iteration " + iterCount.toString() + ": " + itemCount.toString())
       if (filteredItems.size > 0) {
         seenByUsers = seenByUsers.+((currentID, filteredItems.toArray))
       }

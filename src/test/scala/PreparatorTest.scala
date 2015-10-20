@@ -27,6 +27,12 @@ class PreparatorTest
     ViewEvent(1, 1, 1000030)
   )
 
+  val like = Seq(
+    LikeEvent(0, 0, 1000010),
+    LikeEvent(0, 1, 1000020),
+    LikeEvent(1, 1, 1000030)
+  )
+  
   val buy = Seq(
     BuyEvent(0, 0, 1000020),
     BuyEvent(0, 1, 1000030),
