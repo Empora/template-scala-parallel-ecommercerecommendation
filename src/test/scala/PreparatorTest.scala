@@ -17,8 +17,8 @@ class PreparatorTest
   )
 
   val items = Map(
-    0 -> Item(categories = Some(List("c0", "c1")),0),
-    1 -> Item(categories = None,0)
+    0 -> Item(categories = Some(List("c0", "c1")), None, 0),
+    1 -> Item(categories = None, None, 0)
   )
 
   val view = Seq(

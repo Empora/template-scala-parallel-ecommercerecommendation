@@ -27,9 +27,9 @@ class ECommAlgorithmTest
 
   val users = Map(0 -> User(None), 1 -> User(None))
 
-  val i0 = Item(categories = Some(List("c0", "c1")), 0)
-  val i1 = Item(categories = None, 0)
-  val i2 = Item(categories = Some(List("c0", "c2")), 0)
+  val i0 = Item(categories = Some(List("c0", "c1")), None, 0)
+  val i1 = Item(categories = None, None, 0)
+  val i2 = Item(categories = Some(List("c0", "c2")), None, 0)
 
   val items = Map(
     0 -> i0,
@@ -167,17 +167,17 @@ class ECommAlgorithmTest
 
     top(0)._1 should be(expected(0)._1)
     top(1)._1 should be(expected(1)._1)
-    top(0)._2 should be(expected(0)._2 plusOrMinus 0.001)
-    top(1)._2 should be(expected(1)._2 plusOrMinus 0.001)
+    top(0)._2 shouldEqual (expected(0)._2 +- 0.001 )
+    top(1)._2 shouldEqual (expected(1)._2 +- 0.001 )
   }
 
   "ECommAlgorithm.predictKnownUser()" should "return top items by considering upload time" in
     {
 
       // define the items
-      val outfit0 = Item(categories = None, 1420070400000L) // corresponds to 2015-01-01, 00:00:00 GMT
-      val outfit1 = Item(categories = None, 1388534400000L) //  corresponds to 2014-01-01, 00:00:00 GMT
-      val outfit2 = Item(categories = None, 1356998400000L) //  corresponds to 2013-01-01, 00:00:00 GMT
+      val outfit0 = Item(categories = None, None, 1420070400000L) // corresponds to 2015-01-01, 00:00:00 GMT
+      val outfit1 = Item(categories = None, None, 1388534400000L) //  corresponds to 2014-01-01, 00:00:00 GMT
+      val outfit2 = Item(categories = None, None, 1356998400000L) //  corresponds to 2013-01-01, 00:00:00 GMT
 
       // define the map
       val items = Map(

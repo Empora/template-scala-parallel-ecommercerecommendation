@@ -83,21 +83,20 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   @transient lazy val logger = Logger[this.type]
 
   def train(sc: SparkContext, data: PreparedData): ECommModel = {
-    require(!data.likeEvents.take(1).isEmpty,
-      s"likeEvents in PreparedData cannot be empty." +
-        " Please check if DataSource generates TrainingData" +
-        " and Preprator generates PreparedData correctly.")
-    require(!data.items.take(1).isEmpty,
-      s"items in PreparedData cannot be empty." +
-        " Please check if DataSource generates TrainingData" +
-        " and Preprator generates PreparedData correctly.")
+//    require(!data.likeEvents.take(1).isEmpty,
+//      s"likeEvents in PreparedData cannot be empty." +
+//        " Please check if DataSource generates TrainingData" +
+//        " and Preprator generates PreparedData correctly.")
+//    require(!data.items.take(1).isEmpty,
+//      s"items in PreparedData cannot be empty." +
+//        " Please check if DataSource generates TrainingData" +
+//        " and Preprator generates PreparedData correctly.")
 
     val mllibRatings: RDD[MLlibRating] = genMLlibRating(data)
-
     // MLLib ALS cannot handle empty training data.
-    require(!mllibRatings.take(1).isEmpty,
-      s"mllibRatings cannot be empty." +
-        " Please check if your events contain valid user and item ID.")
+//    require(!mllibRatings.take(1).isEmpty,
+//      s"mllibRatings cannot be empty." +
+//        " Please check if your events contain valid user and item ID.")
 
     // seed for MLlib ALS
     val seed = ap.seed.getOrElse(System.nanoTime)
@@ -120,7 +119,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val productFeatures: Map[Int, (Item, Option[Array[Double]])] =
       items.leftOuterJoin(m.productFeatures).collectAsMap.toMap
 
-//    val popularCount = trainDefaultViews(data)
+    //    val popularCount = trainDefaultViews(data)
     val popularCount = trainDefaultLikes(data)
     //    val popularCount = trainDefault(data)
 
@@ -140,6 +139,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     //    val retVal = exportForClustering(productModels)
 
+    logger.info("nr of product features: " + productModels.size)
     new ECommModel(
       rank = m.rank,
       userFeatures = userFeatures,
@@ -163,10 +163,11 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
         ((uindex, iindex), 1)
       }
-      .reduceByKey(_ + _) // aggregate all view events of same user-item pair
+      .reduceByKey(_ + _) // aggregate all like events of same user-item pair
       .map {
         case ((u, i), v) =>
           // MLlibRating requires integer index for user and item
+          // in the following line set v=1 to reduce the like events to one per user-item pair
           MLlibRating(u, i, v)
       }
     //.cache()
@@ -227,7 +228,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     likeCountsRDD.collectAsMap.toMap
   }
-  
+
   /**
    * the main prediction method, entry point for incoming queries from engine
    * ! do not rename -- predictionIO framework specific name !
@@ -523,9 +524,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         case (i, pm) =>
           pm.features.isDefined &&
             isCandidateItem(
-              i = i,
+              itemID = i,
+              queryUserID = query.user.getOrElse(-1),
               item = pm.item,
-              //          tstart = 0,
               tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
               categories = query.categories,
               whiteList = whiteList,
@@ -606,11 +607,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     //================================================================================================
     //  FIND THE VIEWED ITEMS FOR EACH OF THE TOP RATED USERS
 
-    var seenByUsers: Map[Int, Array[Int]] = Map.empty[Int, Array[Int]]
+    var likedByUsers: Map[Int, Array[Int]] = Map.empty[Int, Array[Int]]
     var iterCount = 0
     var itemCount = 0
     val minNrItems = query.num
 
+    var allIDs = Set.empty[Int]
+    
     logger.info("top rated users length: " + topRatedUsers.length)
     val startWhile = System.currentTimeMillis()
     while (itemCount < minNrItems && iterCount < topRatedUsers.length) {
@@ -626,7 +629,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
             appName = ap.appName,
             entityType = "user",
             entityId = currentID.toString(),
-            eventNames = Some(ap.seenEvents),
+            eventNames = Some(List("like")),
             targetEntityType = Some(Some("item")),
             // set time limit to avoid super long DB access
             timeout = Duration(200, "millis"))
@@ -651,26 +654,37 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           }
         }.toSet
       }
+ 
 
       // filter the resulting seen items of the current similar user
       // filtering is done by isCandidateItem --> only items are considered
-      // who have been uploaded since queryStartTime
-      val filteredItems = seenItems.par.filter {
+      // which have been uploaded since queryStartTime and which don't belong
+      // to the user himself
+      var filteredItems = seenItems.par.filter {
         case (id) => productModels.contains(id) &&
           isCandidateItem(
-            i = id,
+            itemID = id,
+            queryUserID = query.user.getOrElse(-1),
             item = productModels.get(id).get.item,
             tstart = queryStartTime,
             categories = query.categories,
             whiteList = whiteList,
             blackList = blackList)
-      }
+      }.seq
 
-      // logger.info("filteredItems = " + filteredItems.seq.toString())
-      itemCount = itemCount + filteredItems.seq.size
-      // logger.info("items at iteration " + iterCount.toString() + ": " + itemCount.toString())
+      // remove all items that have already been liked by a previous user 
+      filteredItems = filteredItems -- allIDs
+      // add the remaining items to the list of all items
+      allIDs = allIDs union filteredItems      
+      
+      itemCount = itemCount + filteredItems.size
+ 
+      // here, the items are added to the array of all found items w.r.t. the similar
+      // user. if all of the top similar users like the same items, this would be bad
+      // say, 100 users like the same 10 items, then, instead of 1000 item this approach
+      // would result in 10 items
       if (filteredItems.size > 0) {
-        seenByUsers = seenByUsers.+((currentID, filteredItems.toArray))
+        likedByUsers = likedByUsers.+((currentID, filteredItems.toArray))
       }
 
     } // end of while loop
@@ -681,7 +695,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     logger.info("iter count: " + iterCount.toString())
     val topRatedUsersMap: Map[Int, Double] = topRatedUsers.toMap
     // Map with user id as key and a tuple ( array of views of this user, score for this user ) as values
-    val topRatedUsersMapWithViews = seenByUsers.map { case (id, itemset) => (id, (itemset, topRatedUsersMap.getOrElse(id, 0.0))) }
+    val topRatedUsersMapWithViews = likedByUsers.map { case (id, itemset) => (id, (itemset, topRatedUsersMap.getOrElse(id, 0.0))) }
 
     //================================================================================================
     //  COLLECT ALL ITEMS OF THE TOP RATED USERS IN ONE MAP
@@ -730,10 +744,10 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     val duration = finishtime - startSearch
 
-    logger.info("filtered items ordered (size = " + itemScoreMapOrdered.length + "):")
-    for (i <- 0 to itemScoreMapOrdered.length - 1) {
-      logger.info("item-id = " + itemScoreMapOrdered(i)._1.toString() + " score = " + itemScoreMapOrdered(i)._2.toString())
-    }
+    //    logger.info("filtered items ordered (size = " + itemScoreMapOrdered.length + "):")
+    //    for (i <- 0 to itemScoreMapOrdered.length - 1) {
+    //      logger.info("item-id = " + itemScoreMapOrdered(i)._1.toString() + " score = " + itemScoreMapOrdered(i)._2.toString())
+    //    }
 
     logger.info("====== TIME INFO ======")
     logger.info("duration get similar users: " + durationGetSimilarUsers.toString() + "ms")
@@ -757,10 +771,10 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       .filter {
         case (i, pm) =>
           isCandidateItem(
-            i = i,
+            itemID = i,
+            queryUserID = query.user.getOrElse(-1),
             item = pm.item,
             tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
-            //          tstart = query.startTime.getOrElse(0),
             categories = query.categories,
             whiteList = whiteList,
             blackList = blackList)
@@ -793,7 +807,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         case (i, pm) =>
           pm.features.isDefined &&
             isCandidateItem(
-              i = i,
+              itemID = i,
+              queryUserID = query.user.getOrElse(-1),
               item = pm.item,
               tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
               categories = query.categories,
@@ -869,18 +884,18 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   }
 
   private def isCandidateItem(
-    i: Int,
+    itemID: Int,
+    queryUserID: Int,
     item: Item,
     tstart: Long,
     categories: Option[Set[String]],
     whiteList: Option[Set[Int]],
     blackList: Set[Int]): Boolean = {
     // can add other custom filtering here
-    //    logger.info("tstart = " + tstart.toString() + " set time = " + item.setTime.toString())
-    tstart <= item.setTime &&
-      //    item.setTime.isAfter(tstart) &&                        // check whether the recommended item has been uploaded after desired start time
-      whiteList.map(_.contains(i)).getOrElse(true) && // check 
-      !blackList.contains(i) &&
+    tstart <= item.setTime &&  // check whether the item has been uploaded not before the desired time
+    queryUserID != item.ownerID.getOrElse(-10000) && // check whether the item belongs to the query user, if so, do not recommend it
+      whiteList.map(_.contains(itemID)).getOrElse(true) && // check 
+      !blackList.contains(itemID) &&
       // filter categories
       categories.map { cat =>
         item.categories.map { itemCat =>
@@ -947,8 +962,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     }
 
   def writeTopItemsToFile(array: Array[(Int, ProductModel)]) {
-        val writer = new BufferedWriter( new FileWriter( new File("/home/andre/RecommendationEngine/Data/Artificial/IntIds/10Users/testdata.json")))
-//    val writer = new BufferedWriter(new FileWriter(new File("/home/andre/Data/FFXData/featureVectorsForCluster.json")))
+    val writer = new BufferedWriter(new FileWriter(new File("/home/andre/RecommendationEngine/Data/Artificial/IntIds/10Users/testdata.json")))
+    //    val writer = new BufferedWriter(new FileWriter(new File("/home/andre/Data/FFXData/featureVectorsForCluster.json")))
 
     val part1: String = "{\"event\":\"$set\",\"entityType\":\"item\",\"entityId\":\""
     val part2: String = "\",\"properties\":{\"feature\":\""
@@ -1003,9 +1018,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val topsRDD: RDD[(Int, ProductModel)] = sc.parallelize(topArray)
     logger.info("tops rdd size: " + topsRDD.count().toString)
 
-//        logger.info("exporting tops to file ...")
-//        exportForClustering(topsRDD)
-//        logger.info("  ... done")
+    //        logger.info("exporting tops to file ...")
+    //        exportForClustering(topsRDD)
+    //        logger.info("  ... done")
 
     topsRDD
   }

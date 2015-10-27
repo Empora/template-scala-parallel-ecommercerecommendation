@@ -35,10 +35,10 @@ class ECommAlgorithmClusterTest
   val f_u1: Array[Double] = Array(0.0, 0.0)
   val f_u2: Array[Double] = Array(0.0, 0.0)
 
-  val i1 = new Item(categories = None, yesterday - oneDay)
-  val i2 = new Item(categories = None, yesterday - oneDay)
-  val i3 = new Item(categories = None, yesterday - oneDay)
-  val i4 = new Item(categories = None, yesterday - oneDay)
+  val i1 = new Item(categories = None, None, yesterday - oneDay)
+  val i2 = new Item(categories = None, None, yesterday - oneDay)
+  val i3 = new Item(categories = None, None, yesterday - oneDay)
+  val i4 = new Item(categories = None, None, yesterday - oneDay)
 
   val f_i1: Array[Double] = Array(1.0, 1.1)
   val f_i2: Array[Double] = Array(0.9, 0.9)

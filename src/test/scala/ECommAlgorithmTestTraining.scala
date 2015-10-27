@@ -50,11 +50,11 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 	)
 
   // create item objects
-	val i1 = Item(categories = Some(List("outfit", "female")),0)
-	val i2 = Item(categories = Some(List("outfit", "male")),0)
-	val i3 = Item(categories = Some(List("outfit", "male")),0)
-	val i4 = Item(categories = Some(List("outfit", "female")),0)
-	val i5 = Item(categories = Some(List("outfit", "male")),0)
+	val i1 = Item(categories = Some(List("outfit", "female")), None, 0)
+	val i2 = Item(categories = Some(List("outfit", "male")), None, 0)
+	val i3 = Item(categories = Some(List("outfit", "male")), None, 0)
+	val i4 = Item(categories = Some(List("outfit", "female")), None, 0)
+	val i5 = Item(categories = Some(List("outfit", "male")), None, 0)
 
   // connects ids and item objects
 	val items = Map(
