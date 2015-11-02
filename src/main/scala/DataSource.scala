@@ -30,7 +30,7 @@ class DataSource(val dsp: DataSourceParams)
 
   override def readTraining(sc: SparkContext): TrainingData = {
     val cacheEvents = false
-    val cleanLikeevents = true
+//    val cleanLikeevents = false
 
     val eventsRDD: RDD[Event] = getAllEvents(sc)
     if (cacheEvents) {
@@ -41,15 +41,15 @@ class DataSource(val dsp: DataSourceParams)
     logger.info("Preparing training data with view, like and buy events not older than " + dsp.startTimeTrain)
 
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents(eventsRDD, minTimeTrain)
-    var likeEventsRDD: RDD[LikeEvent] = getLikeEvents(eventsRDD, minTimeTrain)
+    val likeEventsRDD: RDD[LikeEvent] = getLikeEvents(eventsRDD, minTimeTrain)
     val dislikeEventsRDD: RDD[DislikeEvent] = getDislikeEvents(eventsRDD, minTimeTrain)
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents(eventsRDD, minTimeTrain)
 
-    if (cleanLikeevents) {
-      likeEventsRDD = cleanLikeEvents(likeEventsRDD, dislikeEventsRDD, sc)
-    }
+//    if (cleanLikeevents) {
+//      likeEventsRDD = cleanLikeEvents(likeEventsRDD, dislikeEventsRDD, sc)
+//    }
     
-    logger.info("number of like events: " + likeEventsRDD.count())
+//    logger.info("number of like events: " + likeEventsRDD.count())
     
     val itemSetTimes: RDD[(Int, Long)] = getItemSetTimes(sc, "item")
     val itemsRDD: RDD[(Int, Item)] = getItems(sc, itemSetTimes)
@@ -62,7 +62,8 @@ class DataSource(val dsp: DataSourceParams)
       likeEventsRDD.cache()
       buyEventsRDD.cache()
     }
-
+    
+    
     val td: TrainingData = new TrainingData(
       users = usersRDD,
       items = itemsRDD,
@@ -70,9 +71,21 @@ class DataSource(val dsp: DataSourceParams)
       likeEvents = likeEventsRDD,
       buyEvents = buyEventsRDD)
 
-    //    logger.info("Training data contains: ")
-    //    logger.info(td.toString())
+//    val itemsArray = itemsRDD.collect()
+//    logger.info("nr items: " + itemsRDD.count())
+//    for ( i <- 0 to itemsArray.length-1 ) {
+//      
+//      val itemID = itemsArray(i)._1
+//      val itemObject = itemsArray(i)._2
+//      
+//      logger.info("id: " + itemID.toString() )
+//      logger.info("cats: " + itemObject.categories.toString())
+//      
+//    }
+//        logger.info("Training data contains: ")
+//        logger.info(td.toString())
 
+    
     td
   }
 
@@ -340,23 +353,23 @@ class DataSource(val dsp: DataSourceParams)
    */
   def getItems(sc: SparkContext, itemsSetTimes: RDD[(Int, Long)]): RDD[(Int, Item)] =
     {
-      //      val coll = itemsSetTimes.collect()
+      val coll = itemsSetTimes.collect()
 
-      val coll2 = itemsSetTimes.collect().toMap
-
-      //      var A : Map[Int,Long] = Map()
-      //      for ( i <- 0 to coll.length - 1 ) {
-      //        A += ( coll(i)._1 -> coll(i)._2 )
-      //      }
-
+      var A : Map[Int,Long] = Map()
+      for ( i <- 0 to coll.length - 1 ) {
+         A += ( coll(i)._1 -> coll(i)._2 )
+      }
+      
+      
       val itemsRDD: RDD[(Int, Item)] = PEventStore.aggregateProperties(
         appName = dsp.appName,
-        entityType = "item")(sc).map {
-          case (entityId, properties) =>
+        entityType = "item"
+        )(sc).map {
+          case ( entityId, properties) =>
             val item = try {
               Item(categories = properties.getOpt[List[String]]("categories"),
                 ownerID = properties.getOpt[Int]("ownerID").orElse(None),
-                setTime = coll2.apply(entityId.toInt))
+                setTime = A.apply(entityId.toInt))
             } catch {
               case e: Exception => {
                 logger.error(s"Failed to get properties ${properties} of" +
