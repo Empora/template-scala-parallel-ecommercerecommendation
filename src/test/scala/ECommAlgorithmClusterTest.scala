@@ -35,20 +35,27 @@ class ECommAlgorithmClusterTest
   val f_u1: Array[Double] = Array(0.0, 0.0)
   val f_u2: Array[Double] = Array(0.0, 0.0)
 
-  val i1 = new Item(categories = None, None, yesterday - oneDay)
-  val i2 = new Item(categories = None, None, yesterday - oneDay)
-  val i3 = new Item(categories = None, None, yesterday - oneDay)
-  val i4 = new Item(categories = None, None, yesterday - oneDay)
+//  Item = (
+//  categories: Option[List[String]],
+//  ownerID: Option[Int],
+//  purchasable: Option[List[Int]],
+//  relatedProducts: Option[List[Int]],
+//  setTime: Long)
+  
+  val i1 = new Item(categories=None, ownerID=None, purchasable=None, relatedProducts=None, setTime=yesterday - oneDay)
+  val i2 = new Item(categories=None, ownerID=None, purchasable=None, relatedProducts=None, setTime=yesterday - oneDay)
+  val i3 = new Item(categories=None, ownerID=None, purchasable=None, relatedProducts=None, setTime=yesterday - oneDay)
+  val i4 = new Item(categories=None, ownerID=None, purchasable=None, relatedProducts=None, setTime=yesterday - oneDay)
 
   val f_i1: Array[Double] = Array(1.0, 1.1)
   val f_i2: Array[Double] = Array(0.9, 0.9)
   val f_i3: Array[Double] = Array(-1.0, -0.9)
   val f_i4: Array[Double] = Array(-0.9, -1.9)
 
-  val pm1: ProductModel = new ProductModel(i1, Some(f_i1), 10)
-  val pm2: ProductModel = new ProductModel(i2, Some(f_i2), 5)
-  val pm3: ProductModel = new ProductModel(i3, Some(f_i3), 20)
-  val pm4: ProductModel = new ProductModel(i4, Some(f_i4), 1)
+  val pm1: ProductModel = new ProductModel(i1, Some(f_i1), 1000)
+  val pm2: ProductModel = new ProductModel(i2, Some(f_i2), 500)
+  val pm3: ProductModel = new ProductModel(i3, Some(f_i3), 2000)
+  val pm4: ProductModel = new ProductModel(i4, Some(f_i4), 100)
 
   val uFeatures = Map(1 -> f_u1, 2 -> f_u2)
   val itemToProductModel = Map(1 -> pm1, 2 -> pm2, 3 -> pm3, 4 -> pm4)
@@ -73,6 +80,7 @@ class ECommAlgorithmClusterTest
         user = None,
         startTime = Some("2000-01-01T12:00:00"),
         categories = None,
+        purchasable = None,
         whiteList = None,
         blackList = None,
         numberOfClusters = Some(2),
@@ -88,6 +96,7 @@ class ECommAlgorithmClusterTest
         user = None,
         startTime = Some("2000-01-01T12:00:00"),
         categories = None,
+        purchasable = None,
         whiteList = None,
         blackList = None,
         numberOfClusters = Some(2),

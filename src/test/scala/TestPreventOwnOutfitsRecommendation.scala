@@ -26,11 +26,11 @@ class TestPreventOwnOutfitsRecommendation
   val algorithm = new ECommAlgorithm(algorithmParams)
 
   // generate some items
-  val i1 = Item(categories = Some(List("outfit")), Some(4), 0)
-  val i2 = Item(categories = Some(List("outfit")), Some(6), 0)
-  val i3 = Item(categories = Some(List("outfit")), Some(6), 0)
-  val i4 = Item(categories = Some(List("outfit")), Some(6), 0)
-  val i5 = Item(categories = Some(List("outfit")), Some(6), 0)
+  val i1 = Item(categories = Some(List("outfit")), Some(4), None, None, 0)
+  val i2 = Item(categories = Some(List("outfit")), Some(6), None, None, 0)
+  val i3 = Item(categories = Some(List("outfit")), Some(6), None, None, 0)
+  val i4 = Item(categories = Some(List("outfit")), Some(6), None, None, 0)
+  val i5 = Item(categories = Some(List("outfit")), Some(6), None, None, 0)
 
   val items = Seq(
     1 -> i1, 2 -> i2, 3 -> i3, 4 -> i4, 5 -> i5)
@@ -78,6 +78,7 @@ class TestPreventOwnOutfitsRecommendation
         user = Some(4),
         startTime = None,
         categories = None,
+        purchasable = None,
         whiteList = None,
         blackList = None,
         numberOfClusters = None,

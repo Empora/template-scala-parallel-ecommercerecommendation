@@ -5,14 +5,31 @@ import io.prediction.controller.EmptyEvaluationInfo
 import io.prediction.controller.Params
 import io.prediction.data.storage.Event
 import io.prediction.data.store.PEventStore
+import org.apache.http._
+import org.apache.http.client._
+import org.apache.http.client.methods.HttpPost
+import org.apache.http.impl.client.DefaultHttpClient
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import grizzled.slf4j.Logger
-
 import scala.util.Sorting
-
 import org.joda.time.DateTime
+import scala.sys.process._
+
+import org.apache.hadoop.hbase.HBaseConfiguration
+import org.apache.hadoop.hbase.client.{
+  HBaseAdmin,
+  HTable,
+  Put,
+  Get,
+  Delete,
+  Result,
+  Scan,
+  ResultScanner
+}
+import org.apache.hadoop.hbase.util.Bytes
+import org.apache.hadoop.hbase.HTableDescriptor
 
 case class DataSourceEvalParams(
   kFold: Int,
@@ -30,7 +47,11 @@ class DataSource(val dsp: DataSourceParams)
 
   override def readTraining(sc: SparkContext): TrainingData = {
     val cacheEvents = false
-//    val cleanLikeevents = false
+    val clean_database = false
+
+    if (clean_database) {
+      cleanDatabase(sc)
+    }
 
     val eventsRDD: RDD[Event] = getAllEvents(sc)
     if (cacheEvents) {
@@ -42,18 +63,26 @@ class DataSource(val dsp: DataSourceParams)
 
     val viewEventsRDD: RDD[ViewEvent] = getViewEvents(eventsRDD, minTimeTrain)
     val likeEventsRDD: RDD[LikeEvent] = getLikeEvents(eventsRDD, minTimeTrain)
-    val dislikeEventsRDD: RDD[DislikeEvent] = getDislikeEvents(eventsRDD, minTimeTrain)
+    val unlikeEventsRDD: RDD[UnlikeEvent] = getUnlikeEvents(eventsRDD, minTimeTrain)
+
     val buyEventsRDD: RDD[BuyEvent] = getBuyEvents(eventsRDD, minTimeTrain)
 
-//    if (cleanLikeevents) {
-//      likeEventsRDD = cleanLikeEvents(likeEventsRDD, dislikeEventsRDD, sc)
-//    }
-    
-//    logger.info("number of like events: " + likeEventsRDD.count())
-    
     val itemSetTimes: RDD[(Int, Long)] = getItemSetTimes(sc, "item")
     val itemsRDD: RDD[(Int, Item)] = getItems(sc, itemSetTimes)
     val usersRDD: RDD[(Int, User)] = getUsers(sc)
+
+    // print items
+    //    val ITEMS = itemsRDD.collect()
+    //    for ( i <- 0 to ITEMS.length - 1 ) {
+    //      val it = ITEMS(i)
+    //      val id = it._1
+    //      val obj = it._2
+    //      logger.info("item " + id + ", category: " + obj.categories.get.toString()
+    //           + ", purchasable: " + obj.purchasable.getOrElse(None)
+    //           + ", relatedProducts: " + obj.relatedProducts.getOrElse(None)
+    //           + ", setTime: " + obj.setTime )
+    //    }
+    //    
 
     if (cacheEvents) {
       usersRDD.cache()
@@ -62,8 +91,7 @@ class DataSource(val dsp: DataSourceParams)
       likeEventsRDD.cache()
       buyEventsRDD.cache()
     }
-    
-    
+
     val td: TrainingData = new TrainingData(
       users = usersRDD,
       items = itemsRDD,
@@ -71,21 +99,17 @@ class DataSource(val dsp: DataSourceParams)
       likeEvents = likeEventsRDD,
       buyEvents = buyEventsRDD)
 
-//    val itemsArray = itemsRDD.collect()
-//    logger.info("nr items: " + itemsRDD.count())
-//    for ( i <- 0 to itemsArray.length-1 ) {
-//      
-//      val itemID = itemsArray(i)._1
-//      val itemObject = itemsArray(i)._2
-//      
-//      logger.info("id: " + itemID.toString() )
-//      logger.info("cats: " + itemObject.categories.toString())
-//      
-//    }
-//        logger.info("Training data contains: ")
-//        logger.info(td.toString())
-
-    
+    //    val itemsArray = itemsRDD.collect()
+    //    logger.info("nr items: " + itemsRDD.count())
+    //    for ( i <- 0 to itemsArray.length-1 ) {
+    //      
+    //      val itemID = itemsArray(i)._1
+    //      val itemObject = itemsArray(i)._2
+    //      
+    //      logger.info("id: " + itemID.toString() )
+    //      logger.info("cats: " + itemObject.categories.toString() + " t=" + itemObject.setTime )
+    //      
+    //    }    
     td
   }
 
@@ -127,7 +151,7 @@ class DataSource(val dsp: DataSourceParams)
           (new TrainingData(usrsRDD, itmsRDD, trainingViews, trainingLikes, trainingBuys),
             new EmptyEvaluationInfo(),
             testingUsers.map {
-              case (user, viewevents) => (Query("recom", evalParams.queryNum, Some(user), None, None, None, None, None, None),
+              case (user, viewevents) => (Query("recom", evalParams.queryNum, Some(user), None, None, None, None, None, None, None),
                 ActualResult(viewevents.toArray))
             })
         }
@@ -218,13 +242,13 @@ class DataSource(val dsp: DataSourceParams)
       likeEventsRDD
     }
 
-  def getDislikeEvents(allEvents: RDD[Event], minT: Long): RDD[DislikeEvent] =
+  def getUnlikeEvents(allEvents: RDD[Event], minT: Long): RDD[UnlikeEvent] =
     {
-      val dislikeEventsRDD: RDD[DislikeEvent] = allEvents
+      val unlikeEventsRDD: RDD[UnlikeEvent] = allEvents
         .filter { event => event.event == "unlike" }
         .map { event =>
           try {
-            DislikeEvent(
+            UnlikeEvent(
               user = event.entityId.toInt,
               item = event.targetEntityId.get.toInt,
               t = event.eventTime.getMillis)
@@ -236,7 +260,7 @@ class DataSource(val dsp: DataSourceParams)
           }
         }.filter { _.t >= minT }
 
-      dislikeEventsRDD
+      unlikeEventsRDD
     }
 
   /**
@@ -263,50 +287,221 @@ class DataSource(val dsp: DataSourceParams)
     }
 
   /**
-   * This method is responsible for deleting all like events for user id -- item id pairs
-   * that are contained in the dislike events with a later time stamp than the latest
-   * like event time stamp
+   * This method calls the several methods to clean the database from superfluous
+   * events
    */
-  def cleanLikeEvents(likeEvents: RDD[LikeEvent], dislikeEvents: RDD[DislikeEvent], sc: SparkContext): RDD[LikeEvent] = {
+  def cleanDatabase(sc: SparkContext) {
+    logger.info("******** cleaning database ********")
 
-    logger.info("=========> clean like events")
+    //    val conf = HBaseConfiguration.create()
+    //    val hbadmin = new HBaseAdmin(conf)
+    //    
+    //    val tableNames = hbadmin.getTableNames
+    //    
+    //    val bla = hbadmin.listTableNames()
+    //      
+    //    for ( i <- 0 to bla.length-1 ) {
+    //      logger.info(bla(i).toString())
+    //    }
+    //    
+    //    val td: HTableDescriptor = hbadmin.getTableDescriptor(bla(0))
+    //    
+    //    val t = new HTable(conf,bla(0).toBytes())
+    //    
 
-    var likeArray = likeEvents.collect()
-    val dislikeArray = dislikeEvents.collect()
-    val dislikeTuples = dislikeArray.groupBy { x => (x.user, x.item) }.toArray
-    val likeTuples = likeArray.groupBy { x => (x.user, x.item) }.toArray
+    cleanLikeEvents(sc)
+    //    cleanItems(sc)
+    //    cleanPredictEvents(sc)
+  }
 
-    for (i <- 0 to dislikeTuples.length - 1) {
+  def cleanPredictEvents(sc: SparkContext) {
+    logger.info("---> clean predict events")
 
-      val dislikeIDs = dislikeTuples(i)._1
-      val userID = dislikeIDs._1
-      val itemID = dislikeIDs._2
+    // first, get all "predict" events
+    val predictEvents: RDD[Event] = PEventStore.find(
+      appName = dsp.appName,
+      entityType = Some("pio_pr"),
+      eventNames = Some(List("predict")))(sc)
 
-      // all dislike events for (uid, iid) current pair
-      val dislikeEvts = dislikeTuples(i)._2
+    val predictEventsArray = predictEvents.collect()
 
-      // all like events for ( uid, iid ) current pair
-      val likeEvts = likeEvents.filter { le =>
-        le.user == dislikeIDs._1 && le.item == dislikeIDs._2
-      }.collect()
+    var nr = 0
 
-      // sort both array according to event time
-      Sorting.quickSort(dislikeEvts)(Ordering.by[(DislikeEvent), Long](_.t).reverse)
-      Sorting.quickSort(likeEvts)(Ordering.by[(LikeEvent), Long](_.t).reverse)
+    if (predictEventsArray.length > 0) {
 
-      // compare the latest events for the current user id and the item id
-      val likeIsLatest = likeEvts(0).t >= dislikeEvts(0).t
-      if (likeIsLatest) {
-        // do nothing, i.e. let like events untouched
-      } else {
-        // remove all like events for this user-item pair in like events
-        likeArray = likeArray
-          .filterNot { likeevent => (likeevent.user == userID && likeevent.item == itemID) }
+      var eventIDsToDelete: Array[String] = Array[String]()
+      for (i <- 0 to predictEventsArray.length - 1) {
+        eventIDsToDelete = eventIDsToDelete ++ predictEventsArray(i).eventId
+      }
+
+      nr = deleteEvents(eventIDsToDelete)
+
+    }
+    logger.info("removed " + nr + " predict events from data base")
+  }
+
+  /**
+   * This method removes all item set events except the latest one (which is supposed
+   * to contain the currently relevant properties of the item), if there are several
+   * item set events at all
+   */
+  def cleanItems(sc: SparkContext) {
+    logger.info("---> clean items")
+    // first, get all 'set item' events
+    val setItemEvents: RDD[Event] = PEventStore.find(
+      appName = dsp.appName,
+      entityType = Some("item"),
+      eventNames = Some(List("$set")))(sc)
+
+    // collect all set item events for each unique item
+    val groupedItems = setItemEvents.groupBy { x => x.entityId.toInt }.collect()
+
+    logger.info("checking for deletions for " + groupedItems.length + " item set events")
+
+    var eventIDsToDelete: Array[String] = Array[String]()
+    for (i <- 0 to groupedItems.length - 1) {
+
+      if ((i % 1000) == 0) {
+        logger.info(i + " done")
+      }
+
+      val currentSetEvents = groupedItems(i)
+
+      // if for the current id there multiple set item events, delete all but the latest
+      if (currentSetEvents._2.size > 1) {
+        val eventsArray = currentSetEvents._2.toArray
+        Sorting.quickSort(eventsArray)(Ordering.by[(Event), Long](_.eventTime.getMillis).reverse)
+
+        for (j <- 1 to eventsArray.length - 1) {
+          eventIDsToDelete = eventIDsToDelete ++ eventsArray(j).eventId
+        }
       }
     }
 
-    sc.parallelize(likeArray)
+    val deletedEvents = deleteEvents(eventIDsToDelete)
+    logger.info("removed " + deletedEvents + " item set events from data base")
   }
+
+  /**
+   * This method takes all unlike events in the database, searches for all like events
+   * of the same user-item-id pair and either removes all like and unlike events if the
+   * unlike event was the latest event for the user-item-id pair, or removes all like and
+   * unlike events for the pair except the last like event if a like event was the latest
+   * event
+   */
+  def cleanLikeEvents(sc: SparkContext) {
+    logger.info("---> clean like events")
+    // first get all "unlike" events that are in the database
+    logger.info("getting unlike events")
+    val unlikeEvts: RDD[Event] = PEventStore.find(
+      appName = dsp.appName,
+      entityType = Some("user"),
+      targetEntityType = Some(Some("item")),
+      eventNames = Some(List("unlike")))(sc)
+
+    logger.info("getting like events")
+    val likeEvts: RDD[Event] = PEventStore.find(
+      appName = dsp.appName,
+      entityType = Some("user"),
+      targetEntityType = Some(Some("item")),
+      eventNames = Some(List("like")))(sc)
+
+    val uniqueUnlikeIDsArray: Array[Int] = unlikeEvts.map { x => x.entityId.toInt }.distinct().collect()
+    logger.info("found unlike events for " + uniqueUnlikeIDsArray.length + " user ids")
+    if (uniqueUnlikeIDsArray.length > 0) {
+
+      logger.info("filter like events w.r.t. unlike user ids")
+      val filteredLikes: RDD[Event] = likeEvts.filter { event => uniqueUnlikeIDsArray contains event.entityId.toInt }
+
+      logger.info("collect the events, unlike ...")
+      val unlikeEventsArray: Array[Event] = unlikeEvts.collect()
+      logger.info("like ...")
+      val filteredLikesArray: Array[Event] = filteredLikes.collect()
+
+      var eventIDsToDelete: Array[String] = Array[String]() // variable to collect the event ids of events to delete
+      for (i <- 0 to uniqueUnlikeIDsArray.length - 1) {
+        logger.info("unlike user " + (i + 1) + ": " + uniqueUnlikeIDsArray(i))
+        val currentUser: Int = uniqueUnlikeIDsArray(i)
+        // get the unlike events of this user
+        val usersUnlikeEvts: Array[Event] = unlikeEventsArray.filter { e => e.entityId.toInt == currentUser }
+        val usersLikeEvts: Array[Event] = filteredLikesArray.filter { e => e.entityId.toInt == currentUser }
+
+        logger.info("current # unlikes: " + usersUnlikeEvts.length)
+        logger.info("current # likes: " + usersLikeEvts.length)
+
+        // now, for all unlike events, get the like events with same target entity id
+        for (j <- 0 to usersUnlikeEvts.length - 1) {
+          // get the id of the item of the j-th unlike event
+          val targetItem = usersUnlikeEvts(j).targetEntityId.get.toInt
+          val targetsUnlikeEvents = usersUnlikeEvts.filter { e =>
+            e.targetEntityId.get.toInt == targetItem
+          }
+          val correspondingLikeEvents = usersLikeEvts.filter { e =>
+            e.targetEntityId.get.toInt == targetItem
+          }
+
+          if (correspondingLikeEvents.length > 0) {
+
+            Sorting.quickSort(targetsUnlikeEvents)(Ordering.by[(Event), Long](_.eventTime.getMillis).reverse)
+            Sorting.quickSort(correspondingLikeEvents)(Ordering.by[(Event), Long](_.eventTime.getMillis).reverse)
+
+            if (correspondingLikeEvents(0).eventTime.getMillis >= targetsUnlikeEvents(0).eventTime.getMillis) {
+              // if the latest event is a like event, then do not delete the latest like
+              // event but all other like events
+              for (t <- 1 to correspondingLikeEvents.length - 1) {
+                logger.info("add like event to delete")
+                eventIDsToDelete = eventIDsToDelete ++ (correspondingLikeEvents(t).eventId)
+              }
+            } else {
+              // if the latest event is an unlike event, then delete all like events
+              for (t <- 0 to correspondingLikeEvents.length - 1) {
+                logger.info("add like event to delete")
+                eventIDsToDelete = eventIDsToDelete ++ (correspondingLikeEvents(t).eventId)
+              }
+            }
+            
+          }
+        }
+        // finally add the unlike events
+        for (j <- 0 to usersUnlikeEvts.length - 1) {
+          logger.info("add unlike event to delete")
+          eventIDsToDelete = eventIDsToDelete ++ (usersUnlikeEvts(j).eventId)
+        }
+      } // end for uniqueUnlikeIDsArray
+
+      
+      logger.info("deleting like and unlike events ...")
+      val nr = deleteEvents(eventIDsToDelete)
+      logger.info("removed " + nr + " like/unlike events from data base")
+    } else {
+      logger.info("not enough unlike events to justify starting expensive cleaning operation!")
+      logger.info("Maybe next time ;-)")
+    }
+  }
+
+  /**
+   * This method takes a list of event ids and removes the corresponding events from database
+   */
+  def deleteEvents(idList: Array[String]): Int =
+    {
+      val str1 = "curl -i -X DELETE http://localhost:7070/events/"
+
+      // str2 for local ClientTestApp
+//            val str2 = ".json?accessKey=eE7OVBlxLknmVC7UHV0jwtAwWP8BDsfMWe23Ey9eJtEb5EQJJyqVEQjW3a3IHFhS"
+//       str2 for dev FFXApp
+      val str2 = ".json?accessKey=lnerkAS2WHiLkcR90SZ8dWY99WPLAz93VioxQ3BoqVZALfntUp6NQd3DP1gm1alY"
+      // str2 for live FFXRecommender
+//                val str2 = ".json?accessKey=iamMrxYuq2b2EVu9D0dKN4MfhVGhqB4V7bIDValJIBd8DE5pw1h84A47sKQpdQTz"
+
+      var nr = 0
+
+      for (i <- 0 to idList.length - 1) {
+        val cmd: String = str1 + idList(i) + str2
+        val result = { cmd !! }
+        nr = nr + 1
+      }
+      nr
+    }
 
   /**
    * get the users. Unlike in the original template, where the EventStore was searched
@@ -355,25 +550,24 @@ class DataSource(val dsp: DataSourceParams)
     {
       val coll = itemsSetTimes.collect()
 
-      var A : Map[Int,Long] = Map()
-      for ( i <- 0 to coll.length - 1 ) {
-         A += ( coll(i)._1 -> coll(i)._2 )
+      var A: Map[Int, Long] = Map()
+      for (i <- 0 to coll.length - 1) {
+        A += (coll(i)._1 -> coll(i)._2)
       }
-      
-      
+
       val itemsRDD: RDD[(Int, Item)] = PEventStore.aggregateProperties(
         appName = dsp.appName,
-        entityType = "item"
-        )(sc).map {
-          case ( entityId, properties) =>
+        entityType = "item")(sc).map {
+          case (entityId, properties) =>
             val item = try {
               Item(categories = properties.getOpt[List[String]]("categories"),
                 ownerID = properties.getOpt[Int]("ownerID").orElse(None),
-                setTime = A.apply(entityId.toInt))
+                purchasable = properties.getOpt[List[String]]("purchasable"),
+                relatedProducts = properties.getOpt[List[Int]]("relatedProducts"),
+                setTime = A.getOrElse(entityId.toInt, System.currentTimeMillis()))
             } catch {
               case e: Exception => {
-                logger.error(s"Failed to get properties ${properties} of" +
-                  s" item ${entityId}. Exception: ${e}.")
+                logger.error(s"Failed to get properties ${properties} of" + s" item ${entityId}. Exception: ${e}.")
                 throw e
               }
             }
@@ -395,6 +589,8 @@ class DataSource(val dsp: DataSourceParams)
               // Assume categories is optional property of item.
               Item(categories = properties.getOpt[List[String]]("categories"),
                 ownerID = properties.getOpt[Int]("ownerID").orElse(None),
+                purchasable = properties.getOpt[List[String]]("purchasable"),
+                relatedProducts = properties.getOpt[List[Int]]("relatedProducts"),
                 setTime = 0L)
             } catch {
               case e: Exception => {
@@ -419,6 +615,8 @@ case class User(
 case class Item(
   categories: Option[List[String]],
   ownerID: Option[Int],
+  purchasable: Option[List[String]],
+  relatedProducts: Option[List[Int]],
   setTime: Long)
 
 /**
@@ -465,7 +663,7 @@ case class LikeEvent(
  * the time stamp
  * and represents the event of when the user disliked (unfavs) an item
  */
-case class DislikeEvent(
+case class UnlikeEvent(
   user: Int,
   item: Int,
   t: Long)

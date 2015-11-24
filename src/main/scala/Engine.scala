@@ -21,6 +21,10 @@ case class Query(
   // a list of castegories (e.g. ["male","product"]), optional, only needed for method "recommend",
   // only items which belong to at least one of the categories in the list are recommended
   categories: Option[Set[String]],
+  // a list of country codes ( e.g. ["DE","EN"] ). Used for filtering recommendations of items
+  // of category product, i.e. one wants to get recommended items that are products and that
+  // are purchasable in a certain country
+  purchasable: Option[String],
   // a list of item ids, optional, only needed for method "recommend", items that are contained in
   // the white list are always recommended
   whiteList: Option[Set[Int]],

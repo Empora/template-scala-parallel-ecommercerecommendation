@@ -27,9 +27,16 @@ class ECommAlgorithmTest
 
   val users = Map(0 -> User(None), 1 -> User(None))
 
-  val i0 = Item(categories = Some(List("c0", "c1")), None, 0)
-  val i1 = Item(categories = None, None, 0)
-  val i2 = Item(categories = Some(List("c0", "c2")), None, 0)
+//  Item = (
+//  categories: Option[List[String]],
+//  ownerID: Option[Int],
+//  purchasable: Option[List[Int]],
+//  relatedProducts: Option[List[Int]],
+//  setTime: Long)
+  
+  val i0 = Item(categories = Some(List("c0", "c1")), None, None, None, 0)
+  val i1 = Item(categories = None, None, None, None, 0)
+  val i2 = Item(categories = Some(List("c0", "c2")), None, None, None, 0)
 
   val items = Map(
     0 -> i0,
@@ -106,6 +113,7 @@ class ECommAlgorithmTest
         user = Some(0),
         startTime = None,
         categories = Some(Set("c0")),
+        purchasable = None,
         whiteList = None,
         blackList = None,
         numberOfClusters = None,
@@ -131,6 +139,7 @@ class ECommAlgorithmTest
         user = Some(0),
         startTime = None,
         categories = None,
+        purchasable = None,
         whiteList = None,
         blackList = None,
         numberOfClusters = None,
@@ -156,6 +165,7 @@ class ECommAlgorithmTest
         user = Some(0),
         startTime = None,
         categories = Some(Set("c0")),
+        purchasable = None,
         whiteList = None,
         blackList = None,
         numberOfClusters = None,
@@ -175,9 +185,9 @@ class ECommAlgorithmTest
     {
 
       // define the items
-      val outfit0 = Item(categories = None, None, 1420070400000L) // corresponds to 2015-01-01, 00:00:00 GMT
-      val outfit1 = Item(categories = None, None, 1388534400000L) //  corresponds to 2014-01-01, 00:00:00 GMT
-      val outfit2 = Item(categories = None, None, 1356998400000L) //  corresponds to 2013-01-01, 00:00:00 GMT
+      val outfit0 = Item(categories = None, None, None, None, 1420070400000L) // corresponds to 2015-01-01, 00:00:00 GMT
+      val outfit1 = Item(categories = None, None, None, None, 1388534400000L) //  corresponds to 2014-01-01, 00:00:00 GMT
+      val outfit2 = Item(categories = None, None, None, None, 1356998400000L) //  corresponds to 2013-01-01, 00:00:00 GMT
 
       // define the map
       val items = Map(
@@ -197,6 +207,7 @@ class ECommAlgorithmTest
           user = Some(0),
           startTime = Some("2000-01-01T12:00:00"),
           categories = None,
+          purchasable = None,
           whiteList = None,
           blackList = None,
           numberOfClusters = None,
@@ -222,6 +233,7 @@ class ECommAlgorithmTest
           user = Some(0),
           startTime = Some("2013-06-01T12:00:00"),
           categories = None,
+          purchasable = None,
           whiteList = None,
           blackList = None,
           numberOfClusters = None,
@@ -246,6 +258,7 @@ class ECommAlgorithmTest
           user = Some(0),
           startTime = Some("2014-06-01T12:00:00"),
           categories = None,
+          purchasable = None,
           whiteList = None,
           blackList = None,
           numberOfClusters = None,

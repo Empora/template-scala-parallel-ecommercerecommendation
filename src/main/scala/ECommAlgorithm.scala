@@ -83,20 +83,20 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   @transient lazy val logger = Logger[this.type]
 
   def train(sc: SparkContext, data: PreparedData): ECommModel = {
-//    require(!data.likeEvents.take(1).isEmpty,
-//      s"likeEvents in PreparedData cannot be empty." +
-//        " Please check if DataSource generates TrainingData" +
-//        " and Preprator generates PreparedData correctly.")
-//    require(!data.items.take(1).isEmpty,
-//      s"items in PreparedData cannot be empty." +
-//        " Please check if DataSource generates TrainingData" +
-//        " and Preprator generates PreparedData correctly.")
+    //    require(!data.likeEvents.take(1).isEmpty,
+    //      s"likeEvents in PreparedData cannot be empty." +
+    //        " Please check if DataSource generates TrainingData" +
+    //        " and Preprator generates PreparedData correctly.")
+    //    require(!data.items.take(1).isEmpty,
+    //      s"items in PreparedData cannot be empty." +
+    //        " Please check if DataSource generates TrainingData" +
+    //        " and Preprator generates PreparedData correctly.")
 
     val mllibRatings: RDD[MLlibRating] = genMLlibRating(data)
     // MLLib ALS cannot handle empty training data.
-//    require(!mllibRatings.take(1).isEmpty,
-//      s"mllibRatings cannot be empty." +
-//        " Please check if your events contain valid user and item ID.")
+    //    require(!mllibRatings.take(1).isEmpty,
+    //      s"mllibRatings cannot be empty." +
+    //        " Please check if your events contain valid user and item ID.")
 
     // seed for MLlib ALS
     val seed = ap.seed.getOrElse(System.nanoTime)
@@ -243,6 +243,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val dateformat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
     val timestring = dateformat.format(today)
     logger.info("request arrived at " + timestring)
+    logger.info("QUERY: " + query.toString())
 
     val method: String = query.method
 
@@ -337,24 +338,24 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       // by calculating the score for an item w.r.t. to the query user by just
       // calculating the inner product of the users feature vector and an item's
       // feature vector
-      //      predictKnownUser(
-      //        userFeature = userFeature.get,
-      //        productModels = productModels,
-      //        query = query,
-      //        whiteList = whiteList,
-      //        blackList = finalBlackList
-      //      )
+            predictKnownUser(
+              userFeature = userFeature.get,
+              productModels = productModels,
+              query = query,
+              whiteList = whiteList,
+              blackList = finalBlackList
+            )
 
       // this method uses the query user's feature vector for finding first similar
       // users to the query user and recommend then the items these users have liked      
-      predictKnownUserToUser(
-        userFeature = userFeature.get,
-        userModels = userFeatures,
-        productModels = productModels,
-        userObjects = userObjects,
-        query = query,
-        whiteList = whiteList,
-        blackList = finalBlackList)
+//      predictKnownUserToUser(
+//        userFeature = userFeature.get,
+//        userModels = userFeatures,
+//        productModels = productModels,
+//        userObjects = userObjects,
+//        query = query,
+//        whiteList = whiteList,
+//        blackList = finalBlackList)
 
     } else {
       // the user doesn't have feature vector.
@@ -468,7 +469,12 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     query.blackList.getOrElse(Set[Int]()) ++ seenItems ++ unavailableItems
   }
 
-  /** Get recent events of the user on items for recommending similar items */
+  /**
+   * Get recent events of the user on items for recommending similar items
+   *  In LEventStore there are all events that have been submitted by the
+   *  event client (i.e. in live setting, by back-end)
+   *
+   */
   def getRecentItems(query: Query, limit: Int): Set[Int] = {
     // get latest 10 user view item events
 
@@ -479,7 +485,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         // entityType and entityId is specified for fast lookup
         entityType = "user",
         entityId = query.user.get.toString(),
-        eventNames = Some(ap.similarEvents),
+        //        eventNames = Some(ap.similarEvents),
+        eventNames = Some(List("like")),
         targetEntityType = Some(Some("item")),
         limit = Some(limit),
         latest = true,
@@ -519,6 +526,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     whiteList: Option[Set[Int]],
     blackList: Set[Int]): Array[(Int, Double)] = {
 
+    
+    logger.info("method: predictKnownUser(...)")
     val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
       .filter {
         case (i, pm) =>
@@ -529,6 +538,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
               item = pm.item,
               tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
               categories = query.categories,
+              purchasable = query.purchasable,
               whiteList = whiteList,
               blackList = blackList)
       }
@@ -539,13 +549,18 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           // may customize here to further adjust score
           (i, s)
       }
-      .filter(_._2 > 0) // only keep items with score > 0
+//      .filter(_._2 > 0) // only keep items with score > 0
       .seq // convert back to sequential collection
 
     val ord = Ordering.by[(Int, Double), Double](_._2).reverse
 
     val topScores = getTopN(indexScores, query.num)(ord).toArray
 
+    logger.info("recommending " + topScores.length + " items")
+    val n = Math.min(10, topScores.length)
+    for ( i <- 0 to n-1 ) {
+      logger.info("id: " + topScores(i)._1 + " score: " + topScores(i)._2)
+    }
     topScores
   }
 
@@ -564,7 +579,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val queryStartTime = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis
     val startSearch = System.currentTimeMillis()
 
-    logger.info("query user: " + query.user.get.toString() + " num: " + query.num.toString() + " startTime: " + query.startTime.toString())
+    logger.info("query user: " + query.user.get.toString() +
+      " num: " + query.num.toString() +
+      " startTime: " + query.startTime.toString())
     //================================================================================================
     //  GET THE SIMILAR USERS
     val startGetSimilarUsers = System.currentTimeMillis()
@@ -613,48 +630,54 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val minNrItems = query.num
 
     var allIDs = Set.empty[Int]
-    
+
     logger.info("top rated users length: " + topRatedUsers.length)
     val startWhile = System.currentTimeMillis()
     while (itemCount < minNrItems && iterCount < topRatedUsers.length) {
 
       val currentID = topRatedUsers(iterCount)._1
       iterCount = iterCount + 1
-
+      //      logger.info("currentID = " + currentID)
       val seenItems: Set[Int] = {
 
-        // get all user item events which are considered as "seen" events
-        val seenEvents: Iterator[Event] = try {
-          LEventStore.findByEntity(
-            appName = ap.appName,
-            entityType = "user",
-            entityId = currentID.toString(),
-            eventNames = Some(List("like")),
-            targetEntityType = Some(Some("item")),
-            // set time limit to avoid super long DB access
-            timeout = Duration(200, "millis"))
-        } catch {
-          case e: scala.concurrent.TimeoutException =>
-            logger.error(s"Timeout when read seen events." +
-              s" Empty list is used. ${e}")
-            Iterator[Event]()
-          case e: Exception =>
-            logger.error(s"Error when read seen events: ${e}")
-            throw e
-        }
-
-        seenEvents.map { event =>
+        // get all user item events which are considered as "like" events
+        val seenEvents: Iterator[Event] =
           try {
-            event.targetEntityId.get.toInt
+            LEventStore.findByEntity(
+              appName = ap.appName,
+              entityType = "user",
+              entityId = currentID.toString(),
+              eventNames = Some(List("like")),
+              targetEntityType = Some(Some("item")),
+              // set time limit to avoid super long DB access
+              timeout = Duration(200, "millis"))
           } catch {
-            case e: Throwable => {
-              logger.error(s"Can't get targetEntityId of event ${event}.")
+            case e: scala.concurrent.TimeoutException =>
+              logger.error(s"Timeout when read seen events." +
+                s" Empty list is used. ${e}")
+              Iterator[Event]()
+            case e: Exception =>
+              logger.error(s"Error when read seen events: ${e}")
               throw e
-            }
           }
+
+        //        val reducedIter = seenEvents.take(10*minNrItems)
+        //        logger.info("id: " + currentID + " seenEvents length: " + seenEvents.length)
+
+        
+        seenEvents.slice(0, 200).map {
+          case event =>
+            try {
+              event.targetEntityId.get.toInt
+            } catch {
+              case e: Throwable => {
+                logger.error(s"Can't get targetEntityId of event ${event}.")
+                throw e
+              }
+            }
         }.toSet
+
       }
- 
 
       // filter the resulting seen items of the current similar user
       // filtering is done by isCandidateItem --> only items are considered
@@ -662,12 +685,15 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       // to the user himself
       var filteredItems = seenItems.par.filter {
         case (id) => productModels.contains(id) &&
+          productModels.get(id).isDefined &&
+          productModels.get(id).exists { p => p.features.isDefined } &&
           isCandidateItem(
             itemID = id,
             queryUserID = query.user.getOrElse(-1),
             item = productModels.get(id).get.item,
             tstart = queryStartTime,
             categories = query.categories,
+            purchasable = query.purchasable,
             whiteList = whiteList,
             blackList = blackList)
       }.seq
@@ -675,17 +701,17 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       // remove all items that have already been liked by a previous user 
       filteredItems = filteredItems -- allIDs
       // add the remaining items to the list of all items
-      allIDs = allIDs union filteredItems      
-      
+      allIDs = allIDs union filteredItems
+
       itemCount = itemCount + filteredItems.size
- 
-      // here, the items are added to the array of all found items w.r.t. the similar
-      // user. if all of the top similar users like the same items, this would be bad
-      // say, 100 users like the same 10 items, then, instead of 1000 item this approach
-      // would result in 10 items
+
       if (filteredItems.size > 0) {
         likedByUsers = likedByUsers.+((currentID, filteredItems.toArray))
       }
+
+      //      logger.info("currentSimUserId: " + currentID + 
+      //                  ", seenItems length: " + seenItems.size + 
+      //                  ", filteredItems: " + filteredItems.size)
 
     } // end of while loop
 
@@ -776,6 +802,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
             item = pm.item,
             tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
             categories = query.categories,
+            purchasable = query.purchasable,
             whiteList = whiteList,
             blackList = blackList)
       }
@@ -812,6 +839,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
               item = pm.item,
               tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
               categories = query.categories,
+              purchasable = query.purchasable,
               whiteList = whiteList,
               blackList = blackList)
       }
@@ -889,22 +917,81 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     item: Item,
     tstart: Long,
     categories: Option[Set[String]],
+    purchasable: Option[String],
     whiteList: Option[Set[Int]],
     blackList: Set[Int]): Boolean = {
     // can add other custom filtering here
-    tstart <= item.setTime &&  // check whether the item has been uploaded not before the desired time
-    queryUserID != item.ownerID.getOrElse(-10000) && // check whether the item belongs to the query user, if so, do not recommend it
-      whiteList.map(_.contains(itemID)).getOrElse(true) && // check 
+    //---------------------------------------------------------------------------------------
+    tstart <= item.setTime && // check whether the item has been uploaded not before the desired time
+      //---------------------------------------------------------------------------------------
+      queryUserID != item.ownerID.getOrElse(-10000) && // check whether the item belongs to the query user, if so, do not recommend it
+      //---------------------------------------------------------------------------------------
+      purchasableIndicator(purchasable, item.purchasable) &&
+      //---------------------------------------------------------------------------------------    
+      whiteList.map(_.contains(itemID)).getOrElse(true) && // check
+      //---------------------------------------------------------------------------------------
       !blackList.contains(itemID) &&
+      //---------------------------------------------------------------------------------------
       // filter categories
-      categories.map { cat =>
+      categories.map { queryCat =>
         item.categories.map { itemCat =>
           // keep this item if has overlap categories with the query
-          !(itemCat.toSet.intersect(cat).isEmpty)
+          !(itemCat.toSet.intersect(queryCat).isEmpty)
         }.getOrElse(false) // discard this item if it has no categories
       }.getOrElse(true)
   }
 
+  private def purchasableIndicator(
+    queryPurchasable: Option[String],
+    itemPurchasable: Option[List[String]]): Boolean = {
+
+    //    logger.info("-----------------------------------------------------------")
+
+    var returnValue: Boolean = false
+
+    if (!queryPurchasable.isDefined) {
+      // if the query does not contain a country code for purchasable indicator then
+      // this is not required and the item is valid
+      //      logger.info("purchasable is not defined")
+      returnValue = true
+    } else {
+
+      if (!itemPurchasable.isDefined) {
+        // if the query requests a certain country code of the item, then discard the item
+        // if it does not have a purchasable country code attached
+        //        logger.info("item purchasable is not defined")
+        returnValue = false
+      } else {
+        // if the query country code is present and the item has attached country codes
+        // which tell the countries where it is purchasable, then check whether the requested
+        // country code is in the set of available country codes
+        val itemCountryCodeSet = itemPurchasable.get.toSet
+        val queryCountryCode = queryPurchasable.get
+
+        //        if ( itemCountryCodeSet.isEmpty ) {
+        //          logger.info("itemCountryCode is defined but empty" )
+        //        }
+        //        
+        //        logger.info("item and query purchasable defined: q=" + queryCountryCode.toString() + " i:" + itemCountryCodeSet.toSet.toString()) 
+
+        if (itemCountryCodeSet.contains(queryCountryCode)) {
+          //          logger.info("item country codes contain query country code: " + itemCountryCodeSet.toString() + " contains " + queryCountryCode)
+
+          returnValue = true
+        } else {
+          //          logger.info("item country codes NOT contain query country code")
+          returnValue = false
+        }
+      }
+    }
+    returnValue
+  }
+
+  /**
+   * productModels: the map itemID -> ProductModel. the product models of the items
+   * found in the loop, i.e. the product models of items to be recommended
+   * allProductModels: the product models of all items in the model (since last training)
+   */
   private def rankFoundItems(
     query: Query,
     productModels: Map[Int, ProductModel],
@@ -913,36 +1000,47 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val recentlyViewed: Set[Int] = getRecentItems(query, 10)
     logger.info("size of recentlyViewed: " + recentlyViewed.size.toString())
 
-    val recentFeatures: Vector[Array[Double]] = recentlyViewed.toVector
-      // productModels may not contain the requested item
-      .filter {
-        case i => (allProductModels.get(i).isDefined &&
-          allProductModels.get(i).get.features.isDefined)
-      }
-      .map {
-        case j =>
-          allProductModels.get(j).get.features.get
-      }
+    var topScores: Array[(Int, Double)] = new Array[(Int, Double)](0)
 
-    logger.info("size of productModels: " + productModels.size.toString())
-    logger.info("size of recentFeatures: " + recentFeatures.size.toString())
+    if (!recentlyViewed.isEmpty && !(recentlyViewed.size == 0)) {
+      // if the recently viewed, i.e. liked items list is not empty       
+      val recentFeatures: Vector[Array[Double]] = recentlyViewed.toVector
+        // productModels may not contain the requested item
+        .filter {
+          case i => (allProductModels.get(i).isDefined &&
+            allProductModels.get(i).get.features.isDefined)
+        }
+        .map {
+          case j =>
+            allProductModels.get(j).get.features.get
+        }
 
-    val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
-      .map {
-        case (i, pm) =>
-          val s = recentFeatures.map { rf =>
-            // pm.features must be defined because of filter logic above
-            cosine(rf, pm.features.get)
-          }.reduce(_ + _)
-          // may customize here to further adjust score
-          (i, s)
-      }
-      .seq // convert back to sequential collection
+      logger.info("size of productModels: " + productModels.size.toString())
+      logger.info("size of recentFeatures: " + recentFeatures.size.toString())
 
-    // reverse means order from highest to lowest
-    // cosine similarity s is in [-1,1], meaning 1 the vectors are the same, -1 opposite
-    val ord = Ordering.by[(Int, Double), Double](_._2).reverse
-    val topScores = getTopN(indexScores, query.num)(ord).toArray
+      val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
+        .map {
+          case (i, pm) =>
+            val s = recentFeatures.map { rf =>
+              // pm.features must be defined because of filter logic above
+              cosine(rf, pm.features.get)
+            }.reduce(_ + _)
+            // may customize here to further adjust score
+            (i, s)
+        }
+        .seq // convert back to sequential collection
+
+      // reverse means order from highest to lowest
+      // cosine similarity s is in [-1,1], meaning 1 the vectors are the same, -1 opposite
+      val ord = Ordering.by[(Int, Double), Double](_._2).reverse
+      topScores = getTopN(indexScores, query.num)(ord).toArray
+    } else {
+      // if the recently liked items list is empty, then take the input items of this method
+      // as output and simply transform them
+      val ts = productModels.toArray.map { case (id, pm) => (id, pm.count.toDouble) }
+      val ord = Ordering.by[(Int, Double), Double](_._2).reverse
+      topScores = getTopN(ts, query.num)(ord).toArray      
+    }
 
     logger.info("topScores size = " + topScores.size.toString())
     for (i <- 0 to topScores.size - 1) {
@@ -950,7 +1048,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       val sc = topScores(i)._2
       logger.info("id = " + id.toString() + " score = " + sc.toString())
     }
-
     topScores
   }
 
@@ -1007,11 +1104,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val d: Long = now - timeBack
 
     val pmsArray: Array[(Int, ProductModel)] = model.productModels.toArray
-    val recent = pmsArray.filter { case (id, pm) => pm.item.setTime >= d }
+    val recent = pmsArray.filter { case (id, pm) =>  ( pm.item.setTime >= d && pm.count > 10 ) }
+    
     val recentArray = recent.toArray
 
     logger.info("going into sort")
     // sort remaining product models w.r.t. counts
+//    Sorting.quickSort(recentArray)(Ordering.by[(Int, ProductModel), Int](_._2.count).reverse)
     Sorting.quickSort(recentArray)(Ordering.by[(Int, ProductModel), Int](_._2.count).reverse)
     val topArray = recentArray.slice(0, maxNum)
 
