@@ -338,24 +338,24 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       // by calculating the score for an item w.r.t. to the query user by just
       // calculating the inner product of the users feature vector and an item's
       // feature vector
-            predictKnownUser(
-              userFeature = userFeature.get,
-              productModels = productModels,
-              query = query,
-              whiteList = whiteList,
-              blackList = finalBlackList
-            )
+//            predictKnownUser(
+//              userFeature = userFeature.get,
+//              productModels = productModels,
+//              query = query,
+//              whiteList = whiteList,
+//              blackList = finalBlackList
+//            )
 
       // this method uses the query user's feature vector for finding first similar
       // users to the query user and recommend then the items these users have liked      
-//      predictKnownUserToUser(
-//        userFeature = userFeature.get,
-//        userModels = userFeatures,
-//        productModels = productModels,
-//        userObjects = userObjects,
-//        query = query,
-//        whiteList = whiteList,
-//        blackList = finalBlackList)
+      predictKnownUserToUser(
+        userFeature = userFeature.get,
+        userModels = userFeatures,
+        productModels = productModels,
+        userObjects = userObjects,
+        query = query,
+        whiteList = whiteList,
+        blackList = finalBlackList)
 
     } else {
       // the user doesn't have feature vector.
