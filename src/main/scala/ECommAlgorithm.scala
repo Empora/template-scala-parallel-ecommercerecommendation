@@ -83,6 +83,10 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
   @transient lazy val logger = Logger[this.type]
 
   def train(sc: SparkContext, data: PreparedData): ECommModel = {
+
+    //=============================================================================
+    // FORMER CHECK WHETHER DATA IS PRESENT, OMITTED FOR PERFORMANCE REASONS
+    // (THE TAKE METHOD IS EXPENSIVE ON LARGE DATA SET)
     //    require(!data.likeEvents.take(1).isEmpty,
     //      s"likeEvents in PreparedData cannot be empty." +
     //        " Please check if DataSource generates TrainingData" +
@@ -91,12 +95,18 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     //      s"items in PreparedData cannot be empty." +
     //        " Please check if DataSource generates TrainingData" +
     //        " and Preprator generates PreparedData correctly.")
+    //=============================================================================
 
     val mllibRatings: RDD[MLlibRating] = genMLlibRating(data)
+
+    //=============================================================================
+    // FORMER CHECK WHETHER THE RATINGS ARE NON-EMPTY. THIS ACTUALLY IS THE
+    // BASIC INFORMATION FOR COMPUTING THE FEATURE VECTORS VIA ALS ALGORITHM
     // MLLib ALS cannot handle empty training data.
     //    require(!mllibRatings.take(1).isEmpty,
     //      s"mllibRatings cannot be empty." +
     //        " Please check if your events contain valid user and item ID.")
+    //=============================================================================
 
     // seed for MLlib ALS
     val seed = ap.seed.getOrElse(System.nanoTime)
@@ -107,7 +117,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       rank = ap.rank,
       iterations = ap.numIterations,
       lambda = ap.lambda,
-      blocks = -1,
+      blocks = 100, // -1
       alpha = 100.0,
       seed = seed)
 
@@ -136,8 +146,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     // get the map Int -> User for model
     val userObjects = data.users.collect().toMap
-
-    //    val retVal = exportForClustering(productModels)
 
     logger.info("nr of product features: " + productModels.size)
     new ECommModel(
@@ -199,6 +207,11 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     buyCountsRDD.collectAsMap.toMap
   }
 
+  /**
+   * Call this method, if the default return ( in case the user is unknown at all,
+   * i.e. does not have a feature vector or any recently viewed/liked items )
+   * should consist of the most viewed items
+   */
   def trainDefaultViews(
     data: PreparedData): Map[Int, Int] = {
     val viewCountsRDD: RDD[(Int, Int)] = data.viewEvents
@@ -214,6 +227,11 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     viewCountsRDD.collectAsMap.toMap
   }
 
+  /**
+   * Call this method, if the default return ( in case the user is unknown at all,
+   * i.e. does not have a feature vector or any recently viewed/liked items )
+   * should consist of the most liked items
+   */
   def trainDefaultLikes(
     data: PreparedData): Map[Int, Int] = {
     val likeCountsRDD: RDD[(Int, Int)] = data.likeEvents
@@ -255,8 +273,16 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       // if the method in query equals "cluster" then go into clustering methods and return
       // outfit suggestions based on clustering result
       case "cluster" => {
-        val sc: SparkContext = new SparkContext()
-        predictedResult = getOnboardingSuggestions(model, query, sc)
+        //        val conf = new SparkConf().setAppName("Clustering").setMaster("local")
+                val sc_cluster: SparkContext = new SparkContext()
+//                predictedResult = getOnboardingSuggestions(model, query, sc_cluster)
+
+                predictedResult = getOnboardingSuggestions(model, query)
+                sc_cluster.stop()
+
+        // alternate onboarding suggestions without clustering (i.e. without
+        // the need to instantiate a second SparkContext which is a critical action)
+        predictedResult = getAlternateOnboardingSuggestions(model, query)
       }
     }
 
@@ -271,53 +297,79 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    * compute item suggestions for the on-boarding approach for unknown user based on clustering
    * results
    */
-  def getOnboardingSuggestions(model: ECommModel, query: Query, sc: SparkContext): PredictedResult = {
+  def getOnboardingSuggestions(model: ECommModel, query: Query): PredictedResult = {
 
     // first, get the input data for the clustering algorithm, i.e. the top liked items
     // of the specified time span which are contained in the model
     val nrItems: Int = 2000
     val daysBack: Long = 60L
     val maxIterations = 40
+    val minCount = 10
     val numClusters = query.numberOfClusters.getOrElse(10)
 
     logger.info("computing " + nrItems.toString() + " most liked items of last " +
       daysBack.toString() + " days for cluster input")
 
     // get the top items for clustering input
-    //    val conf = new SparkConf().setMaster("spark://localhost:7077").setAppName("test-cluster-app")
-    //    val sc: SparkContext = new SparkContext()
-    val topsForClustering: RDD[(Int, ProductModel)] = computeTopsForClustering(sc, model, daysBack, nrItems)
+    val topsForClustering: Array[(Int, ProductModel)] = computeTopsForClustering(model, daysBack, nrItems, minCount)
     // calculate the map itemID -> #likes
-    val itemToCountRDD: RDD[(Int, Int)] = topsForClustering.map { case (id, pm) => (id, pm.count) }
+    val itemToCountArray: Array[(Int, Int)] = topsForClustering.map { case (id, pm) => (id, pm.count) }
 
     var itemClusters: Array[ItemScore] = Array()
 
-    if (topsForClustering.count() > 0) {
+    if (topsForClustering.length > 0) {
 
-      val itemToClusterRDD: RDD[(Int, Int)] = runClusterAlgorithm(sc, topsForClustering, maxIterations, numClusters)
+      val itemToClusterArray: Array[(Int, Int)] = runClusterAlgorithm(topsForClustering, maxIterations, numClusters)
 
       val returnCluster = query.returnCluster.getOrElse(-1)
-
-      val itemToCountMap = itemToCountRDD.collect().toMap
-      val itemToClusterMap = itemToClusterRDD.collect().toMap
+      val itemToClusterMap = itemToClusterArray.toMap
 
       if (returnCluster < 0) {
         logger.info("no cluster specified, calculating over all clusters")
-        itemClusters = collectOverAllClusters(itemToClusterRDD, itemToCountRDD, query)
+        itemClusters = collectOverAllClusters(itemToClusterArray, itemToCountArray, query)
 
       } else {
         logger.info("returning only from cluster " + returnCluster.toString() + ", num to return: " + query.num.toString())
-        itemClusters = collectFromSpecificCluster(itemToClusterRDD, itemToCountRDD, query)
+        itemClusters = collectFromSpecificCluster(itemToClusterArray, itemToCountArray, query)
       }
 
     }
-    sc.stop()
     new PredictedResult(itemClusters.toArray)
+  }
+
+  def getAlternateOnboardingSuggestions(model: ECommModel, query: Query): PredictedResult = {
+
+    logger.info("get alternate onboarding suggestions")
+    val daysBack: Long = 60L
+    val nrItems: Int = query.num
+    val minCount: Int = 10
+
+    val topModels: Array[(Int, ProductModel)] = computeTopsForClustering(model, daysBack, nrItems, minCount)
+    val itemToCountArray: Array[(Int, Int)] = topModels.map { case (id, pm) => (id, pm.count) }
+    val itemToCountMap = itemToCountArray.toMap
+    var idArray: Array[Int] = itemToCountArray.map(x => x._1)
+
+    idArray = shuffle(idArray)
+
+    logger.info("computed " + topModels.length + " top models")
+
+    val itemScoreArray: Array[ItemScore] = idArray.map {
+      id =>
+        new ItemScore(
+          item = id,
+          score = itemToCountMap.get(id).get.toDouble,
+          cluster = None)
+    }
+
+    logger.info("returning " + itemScoreArray.length + " outfits")
+    new PredictedResult(itemScoreArray)
   }
 
   /**
    * compute recommendations for a specific user based on e-commerce recommendation template's
    * standard approach.
+   * If a whiteList containing outfit ids is submitted in the query, then only the outfits
+   * contained in the white list will be recommended
    */
   def getRecommendations(model: ECommModel, query: Query): PredictedResult = {
 
@@ -332,35 +384,46 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val userFeature: Option[Array[Double]] = userFeatures.get(query.user.get);
 
     val topScores: Array[(Int, Double)] = if (userFeature.isDefined) {
+
       // the user has feature vector
 
       // this method creates recommendations via the template's default approach
       // by calculating the score for an item w.r.t. to the query user by just
       // calculating the inner product of the users feature vector and an item's
       // feature vector
-//            predictKnownUser(
-//              userFeature = userFeature.get,
-//              productModels = productModels,
-//              query = query,
-//              whiteList = whiteList,
-//              blackList = finalBlackList
-//            )
+      //      logger.info("query.purchasable.isEmpty: " + query.purchasable.isEmpty)
+      //      logger.info("query.purchasable.isEmpty(): " + query.purchasable.isEmpty)
+      //      logger.info("query.categories.get.contains(product): " + query.categories.get.contains("product"))
 
-      // this method uses the query user's feature vector for finding first similar
-      // users to the query user and recommend then the items these users have liked      
-      predictKnownUserToUser(
-        userFeature = userFeature.get,
-        userModels = userFeatures,
-        productModels = productModels,
-        userObjects = userObjects,
-        query = query,
-        whiteList = whiteList,
-        blackList = finalBlackList)
+      logger.info("whiteList: " + whiteList.getOrElse(Set[Int]()).size)
+      if ((!query.purchasable.isEmpty && !query.purchasable.get.isEmpty()) || whiteList.size > 0) {
+        logger.info("purchasable is NOT empty AND countryCode string is NOT empty")
 
+        predictKnownUser(
+          userFeature = userFeature.get,
+          productModels = productModels,
+          query = query,
+          whiteList = whiteList,
+          blackList = finalBlackList)
+
+      } else {
+
+        // this method uses the query user's feature vector for finding first similar
+        // users to the query user and recommend then the items these users have liked      
+        predictKnownUserToUser(
+          userFeature = userFeature.get,
+          userModels = userFeatures,
+          productModels = productModels,
+          userObjects = userObjects,
+          query = query,
+          whiteList = whiteList,
+          blackList = finalBlackList)
+
+      }
     } else {
       // the user doesn't have feature vector.
       // For example, new user is created after model is trained.
-      logger.info(s"No userFeature found for user ${query.user}.")
+      logger.info("No userFeature found for user " + query.user.get)
 
       // check if the user has recent events on some items
       val recentList: Set[Int] = getRecentItems(query, 10)
@@ -387,6 +450,23 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           blackList = finalBlackList)
       }
     }
+    //================================================================================
+    // for debugging only
+    val nrPrint = Math.min(10, topScores.length)
+    logger.info("printing " + nrPrint + "/" + topScores.length + " recommendations")
+    for (i <- 0 to nrPrint - 1) {
+      val id = topScores(i)._1
+      val sc = (math floor (topScores(i)._2) * 1000.0) / 1000.0
+
+      val tL = productModels.get(id).get.item.setTime
+      val dt = new DateTime(tL)
+      val dom = dt.getDayOfMonth.toString()
+      val moy = dt.getMonthOfYear.toString()
+      val y = dt.getYear.toString()
+      val ts = y + "-" + moy + "-" + dom
+      logger.info("id: " + id.toString() + " s: " + sc.toString() + " t: " + ts)
+    }
+    //================================================================================
 
     val itemScores = topScores.map {
       case (i, s) =>
@@ -425,16 +505,43 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           throw e
       }
 
-      seenEvents.map { event =>
-        try {
-          event.targetEntityId.get.toInt
-        } catch {
-          case e: Throwable => {
-            logger.error(s"Can't get targetEntityId of event ${event}.")
-            throw e
+      //      seenEvents.map { event =>
+      //        try {
+      //          event.targetEntityId.get.toInt
+      //        } catch {
+      //          case e: Throwable => {
+      //            logger.error(s"Can't get targetEntityId of event ${event}.")
+      //            throw e
+      //          }
+      //        }
+      //      }.toSet
+
+      //================================================================
+
+      val seenEventsTargetIds = seenEvents.map {
+        case event =>
+          try {
+            event.targetEntityId.get.toInt
+          } catch {
+            case e: Throwable => {
+              logger.error(s"Can't get targetEntityId of event ${event}.")
+              throw e
+            }
           }
+      }
+
+      val seenEventsTargetIdsSet = try {
+        seenEventsTargetIds.toSet
+      } catch {
+        case e: Throwable => {
+          logger.error(".toSet method failed. Using empty set!")
+          Set[Int]()
         }
-      }.toSet
+      }
+
+      seenEventsTargetIdsSet
+
+      //================================================================      
     } else {
       Set[Int]()
     }
@@ -474,9 +581,17 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    *  In LEventStore there are all events that have been submitted by the
    *  event client (i.e. in live setting, by back-end)
    *
+   * INPUT
+   * query: the query that contains information about the query user
+   * limit: the number of events that should be returned
+   *
+   * Note: If optional parameter latest=true, then it can happen that, if
+   * a user has more than limit like events since last training and these events
+   * have been submitted by the event client, none of the returned liked items has
+   * a feature vector, since they weren't present since last training
    */
   def getRecentItems(query: Query, limit: Int): Set[Int] = {
-    // get latest 10 user view item events
+    // get the specified number of latest like events of query user
 
     logger.info("get recent items for user " + query.user.get.toString())
     val recentEvents = try {
@@ -502,18 +617,42 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         throw e
     }
 
-    val recentItems: Set[Int] = recentEvents.map { event =>
-      try {
-        event.targetEntityId.get.toInt
-      } catch {
-        case e: Throwable => {
-          logger.error("Can't get targetEntityId of event ${event}.")
-          throw e
-        }
-      }
-    }.toSet
+    //    val recentItems: Set[Int] = recentEvents.map { event =>
+    //      try {
+    //        event.targetEntityId.get.toInt
+    //      } catch {
+    //        case e: Throwable => {
+    //          logger.error("Can't get targetEntityId of event ${event}.")
+    //          throw e
+    //        }
+    //      }
+    //    }.toSet
 
-    logger.info("found " + recentItems.size.toString() + " recently viewed items by unknown user")
+    //================================================================
+
+    val recentItems_tmp = recentEvents.map {
+      case event =>
+        try {
+          event.targetEntityId.get.toInt
+        } catch {
+          case e: Throwable => {
+            logger.error(s"Can't get targetEntityId of event ${event}.")
+            throw e
+          }
+        }
+    }
+
+    val recentItems = try {
+      recentItems_tmp.toSet
+    } catch {
+      case e: Throwable => {
+        logger.error(".toSet method failed. Using empty set in recentItems!")
+        Set[Int]()
+      }
+    }
+    //================================================================    
+
+    logger.info("found " + recentItems.size.toString() + " recently viewed items")
 
     recentItems
   }
@@ -526,46 +665,74 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     whiteList: Option[Set[Int]],
     blackList: Set[Int]): Array[(Int, Double)] = {
 
-    
     logger.info("method: predictKnownUser(...)")
-    val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
+
+    logger.info("product models: " + productModels.size)
+
+    // the feature vectors for items that are product may not be defined, hence here
+    // we maybe discard all product items
+    val filteredForDefinedFeature = productModels.par // convert to parallel collection
       .filter {
-        case (i, pm) =>
-          pm.features.isDefined &&
-            isCandidateItem(
-              itemID = i,
-              queryUserID = query.user.getOrElse(-1),
-              item = pm.item,
-              tstart = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis,
-              categories = query.categories,
-              purchasable = query.purchasable,
-              whiteList = whiteList,
-              blackList = blackList)
+        case (id, pm) =>
+          pm.features.isDefined //&&
       }
-      .map {
-        case (i, pm) =>
-          // NOTE: features must be defined, so can call .get
-          val s = dotProduct(userFeature, pm.features.get)
-          // may customize here to further adjust score
-          (i, s)
+
+    var startTime: Long = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis 
+    if ( whiteList.nonEmpty ) {
+      logger.info("set time to be 1970 time, i.e. whiteList is present")
+      startTime = (new DateTime("1970-01-01T00:00:00")).getMillis
+    } else {
+      logger.info("whiteList is not present --> set time to be query time")
+    }
+    
+    logger.info("features defined: " + filteredForDefinedFeature.size)
+    val filteredForCandidate = filteredForDefinedFeature.par // convert to parallel collection
+      .filter {
+        case (id, pm) =>
+          //          !pm.item.purchasable.isEmpty &&
+          isCandidateItem(
+            itemID = id,
+            queryUserID = query.user.getOrElse(-1),
+            item = pm.item,
+            tstart = startTime,
+            categories = query.categories,
+            purchasable = query.purchasable,
+            whiteList = whiteList,
+            blackList = blackList)
       }
-//      .filter(_._2 > 0) // only keep items with score > 0
+
+    logger.info("candidates: " + filteredForCandidate.size)
+    val indexScores = filteredForCandidate.map {
+      case (i, pm) =>
+        // NOTE: features must be defined, so can call .get
+        val s = dotProduct(userFeature, pm.features.get)
+        // may customize here to further adjust score
+        (i, s)
+    }
+      //      .filter(_._2 > 0) // only keep items with score > 0
       .seq // convert back to sequential collection
 
     val ord = Ordering.by[(Int, Double), Double](_._2).reverse
-
     val topScores = getTopN(indexScores, query.num)(ord).toArray
-
-    logger.info("recommending " + topScores.length + " items")
-    val n = Math.min(10, topScores.length)
-    for ( i <- 0 to n-1 ) {
-      logger.info("id: " + topScores(i)._1 + " score: " + topScores(i)._2)
-    }
     topScores
   }
 
   /**
    * Create recommendations on most similar users for the user in query
+   *
+   * WORKFLOW:
+   *
+   * (i)   filter all users in the model w.r.t. T (the query start time), i.e. only
+   *       consider users that have like events after T
+   * (ii)  get a sorted list of the users in model according to their cosine similarity
+   *       with the query user, the most similar user first
+   * (iii) iterate over top rated users and get num (query.num) items that
+   * 			 (a) the query user hasn't seen yet (b) have been uploaded not before T
+   *       (c) have at least one category of the query (d) that are in the model ...
+   * (iv)  rank the items w.r.t. recently viewed items of query user (item-to-item cosine
+   *       similarity) if the user recently liked some items (and these are in the model)
+   *       or else, sort the items by number of likes
+   *
    */
   def predictKnownUserToUser(
     userFeature: Array[Double],
@@ -578,16 +745,17 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     val queryStartTime = (new DateTime(query.startTime.getOrElse("1970-01-01T00:00:00"))).getMillis
     val startSearch = System.currentTimeMillis()
-
+    logger.info("start time in millis: " + queryStartTime)
     logger.info("query user: " + query.user.get.toString() +
       " num: " + query.num.toString() +
       " startTime: " + query.startTime.toString())
+
     //================================================================================================
     //  GET THE SIMILAR USERS
     val startGetSimilarUsers = System.currentTimeMillis()
     // filter the user models to compare only the relevant users, i.e. those that have been active
     // after the start date
-    logger.info("userModels size = " + userModels.size.toString())
+    logger.info("total number of users in model: " + userModels.size.toString())
 
     // filter the userModels that result from users that are in the trained model w.r.t. the
     // ids that are in the userObjects
@@ -639,7 +807,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       iterCount = iterCount + 1
       //      logger.info("currentID = " + currentID)
       val seenItems: Set[Int] = {
-
         // get all user item events which are considered as "like" events
         val seenEvents: Iterator[Event] =
           try {
@@ -661,11 +828,19 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
               throw e
           }
 
-        //        val reducedIter = seenEvents.take(10*minNrItems)
-        //        logger.info("id: " + currentID + " seenEvents length: " + seenEvents.length)
+        //        seenEvents.slice(0, 200).map {
+        //          case event =>
+        //            try {
+        //              event.targetEntityId.get.toInt
+        //            } catch {
+        //              case e: Throwable => {
+        //                logger.error(s"Can't get targetEntityId of event ${event}.")
+        //                throw e
+        //              }
+        //            }
+        //        }.toSet
 
-        
-        seenEvents.slice(0, 200).map {
+        val seenEventsTargetIds = seenEvents.slice(0, 200).map {
           case event =>
             try {
               event.targetEntityId.get.toInt
@@ -675,10 +850,31 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
                 throw e
               }
             }
-        }.toSet
+        }
 
-      }
+        val seenEventsTargetIdsSet = try {
+          seenEventsTargetIds.toSet
+        } catch {
+          case e: Throwable => {
+            logger.error(".toSet method failed. Using empty set!")
+            Set[Int]()
+          }
+        }
 
+        seenEventsTargetIdsSet
+      } // closes seenItems: Set[Int] =
+
+      //===========================================================================================
+
+      //      logger.info("******************************")
+      //      val tmp = seenItems.map { x => productModels.get(x).get.item.setTime }
+      //      val tmp2 = tmp.toArray
+      //      for ( q <- 0 to tmp2.size-1 ) {
+      //        logger.info(tmp2(q).toString())
+      //      }
+      //      logger.info("******************************")
+      //      logger.info("seenItems size = " + seenItems.size)
+      //===========================================================================================      
       // filter the resulting seen items of the current similar user
       // filtering is done by isCandidateItem --> only items are considered
       // which have been uploaded since queryStartTime and which don't belong
@@ -708,11 +904,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       if (filteredItems.size > 0) {
         likedByUsers = likedByUsers.+((currentID, filteredItems.toArray))
       }
-
-      //      logger.info("currentSimUserId: " + currentID + 
-      //                  ", seenItems length: " + seenItems.size + 
-      //                  ", filteredItems: " + filteredItems.size)
-
     } // end of while loop
 
     val endWhile = System.currentTimeMillis()
@@ -770,11 +961,6 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     val duration = finishtime - startSearch
 
-    //    logger.info("filtered items ordered (size = " + itemScoreMapOrdered.length + "):")
-    //    for (i <- 0 to itemScoreMapOrdered.length - 1) {
-    //      logger.info("item-id = " + itemScoreMapOrdered(i)._1.toString() + " score = " + itemScoreMapOrdered(i)._2.toString())
-    //    }
-
     logger.info("====== TIME INFO ======")
     logger.info("duration get similar users: " + durationGetSimilarUsers.toString() + "ms")
     logger.info("duration while loop: " + durationWhile.toString() + "ms")
@@ -782,11 +968,18 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     logger.info("duration ranking: " + durationRanking.toString() + "ms")
     logger.info("duration final sort: " + durationFinalSort.toString() + "ms")
     logger.info("overall time used: " + duration.toString() + "ms")
-    //      uniqueItems
+
     rankedItems
   }
 
-  /** Default prediction when know nothing about the user */
+  /**
+   * This method is called when we know nothing about the query user, i.e.
+   * the user is not present in the model of the currently deployed engine
+   * and the does not have any likes on items.
+   *
+   * In this case the most liked items that have been uploaded since
+   * query.startTime are recommended
+   */
   def predictDefault(
     productModels: Map[Int, ProductModel],
     query: Query,
@@ -816,6 +1009,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     val ord = Ordering.by[(Int, Double), Double](_._2).reverse
     val topScores = getTopN(indexScores, query.num)(ord).toArray
 
+    logger.info("returning " + topScores.length + " items from predictDefault method")
     topScores
   }
 
@@ -920,6 +1114,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     purchasable: Option[String],
     whiteList: Option[Set[Int]],
     blackList: Set[Int]): Boolean = {
+
     // can add other custom filtering here
     //---------------------------------------------------------------------------------------
     tstart <= item.setTime && // check whether the item has been uploaded not before the desired time
@@ -929,9 +1124,13 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       purchasableIndicator(purchasable, item.purchasable) &&
       //---------------------------------------------------------------------------------------    
       whiteList.map(_.contains(itemID)).getOrElse(true) && // check
+      //---------------------------------------------------------------------------------------    
+      //      whiteListCheck(whiteList, itemID) && // check
       //---------------------------------------------------------------------------------------
-      !blackList.contains(itemID) &&
+//                  !blackList.contains(itemID) &&
       //---------------------------------------------------------------------------------------
+      !blackListCheck(blackList, whiteList, itemID) &&
+      //      ---------------------------------------------------------------------------------------
       // filter categories
       categories.map { queryCat =>
         item.categories.map { itemCat =>
@@ -939,6 +1138,40 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
           !(itemCat.toSet.intersect(queryCat).isEmpty)
         }.getOrElse(false) // discard this item if it has no categories
       }.getOrElse(true)
+  }
+
+  private def blackListCheck(
+    blackList: Set[Int],
+    whiteList: Option[Set[Int]],
+    itemID: Int): Boolean = {
+
+    var retVal = false
+
+    // if true, whiteList exists
+    var wlExists: Boolean = whiteList.nonEmpty
+
+    if (wlExists) {
+      if ( blackList.contains(itemID) ) {
+        retVal = false
+      }
+    } else {
+      if (blackList.contains(itemID)) {
+        retVal = true
+        //      logger.info(itemID.toString() + " is in blackList")
+      }
+    }
+    return retVal
+  }
+
+  private def whiteListCheck(whiteList: Option[Set[Int]], itemID: Int): Boolean = {
+
+    val wl = whiteList.getOrElse(Set[Int]())
+
+    if (wl.contains(itemID)) {
+      logger.info(itemID.toString() + " is in whiteList")
+    }
+
+    return true
   }
 
   private def purchasableIndicator(
@@ -968,11 +1201,11 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
         val itemCountryCodeSet = itemPurchasable.get.toSet
         val queryCountryCode = queryPurchasable.get
 
-        //        if ( itemCountryCodeSet.isEmpty ) {
-        //          logger.info("itemCountryCode is defined but empty" )
+        //        if (itemCountryCodeSet.isEmpty) {
+        //          logger.info("itemCountryCode is defined but empty")
         //        }
-        //        
-        //        logger.info("item and query purchasable defined: q=" + queryCountryCode.toString() + " i:" + itemCountryCodeSet.toSet.toString()) 
+
+        //        logger.info("item and query purchasable defined: q=" + queryCountryCode.toString() + " i:" + itemCountryCodeSet.toSet.toString())
 
         if (itemCountryCodeSet.contains(queryCountryCode)) {
           //          logger.info("item country codes contain query country code: " + itemCountryCodeSet.toString() + " contains " + queryCountryCode)
@@ -1018,36 +1251,47 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       logger.info("size of productModels: " + productModels.size.toString())
       logger.info("size of recentFeatures: " + recentFeatures.size.toString())
 
-      val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
-        .map {
-          case (i, pm) =>
-            val s = recentFeatures.map { rf =>
-              // pm.features must be defined because of filter logic above
-              cosine(rf, pm.features.get)
-            }.reduce(_ + _)
-            // may customize here to further adjust score
-            (i, s)
-        }
-        .seq // convert back to sequential collection
+      if (recentFeatures.size > 0) {
 
-      // reverse means order from highest to lowest
-      // cosine similarity s is in [-1,1], meaning 1 the vectors are the same, -1 opposite
-      val ord = Ordering.by[(Int, Double), Double](_._2).reverse
-      topScores = getTopN(indexScores, query.num)(ord).toArray
+        val indexScores: Map[Int, Double] = productModels.par // convert to parallel collection
+          .map {
+            case (i, pm) =>
+              val s = recentFeatures.map { rf =>
+                // pm.features must be defined because of filter logic above
+                cosine(rf, pm.features.get)
+              }.reduce(_ + _)
+              // may customize here to further adjust score
+              (i, s)
+          }
+          .seq // convert back to sequential collection
+
+        // reverse means order from highest to lowest
+        // cosine similarity s is in [-1,1], meaning 1 the vectors are the same, -1 opposite
+        val ord = Ordering.by[(Int, Double), Double](_._2).reverse
+        topScores = getTopN(indexScores, query.num)(ord).toArray
+      } else {
+        val ts = productModels.toArray.map { case (id, pm) => (id, pm.count.toDouble) }
+        val ord = Ordering.by[(Int, Double), Double](_._2).reverse
+        topScores = getTopN(ts, query.num)(ord).toArray
+      }
     } else {
       // if the recently liked items list is empty, then take the input items of this method
       // as output and simply transform them
       val ts = productModels.toArray.map { case (id, pm) => (id, pm.count.toDouble) }
       val ord = Ordering.by[(Int, Double), Double](_._2).reverse
-      topScores = getTopN(ts, query.num)(ord).toArray      
+      topScores = getTopN(ts, query.num)(ord).toArray
     }
 
-    logger.info("topScores size = " + topScores.size.toString())
-    for (i <- 0 to topScores.size - 1) {
-      val id = topScores(i)._1
-      val sc = topScores(i)._2
-      logger.info("id = " + id.toString() + " score = " + sc.toString())
-    }
+    //    val nrPrint = Math.min(topScores.size, 10) - 1
+    //    logger.info("topScores size = " + topScores.size.toString() + ", printing top " + (nrPrint + 1))
+    //    for (i <- 0 to nrPrint) {
+    //      val id = topScores(i)._1
+    //      val sc = topScores(i)._2
+    //      val settime = productModels.get(id).get.item.setTime
+    //      val timeObj = new DateTime(settime)
+    //      logger.info("id = " + id.toString() + " score = " + sc.toString() 
+    //          + " upload time: " + timeObj.toString())
+    //    }
     topScores
   }
 
@@ -1097,31 +1341,22 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    * returns the top n items sorted by number of likes (count parameter) that are contained in
    * the current model
    */
-  private def computeTopsForClustering(sc: SparkContext, model: ECommModel, daysBack: Long, maxNum: Int): RDD[(Int, ProductModel)] = {
+  private def computeTopsForClustering(model: ECommModel, daysBack: Long, maxNum: Int, minCount: Int): Array[(Int, ProductModel)] = {
 
     val timeBack = daysBack * 24L * 60L * 60L * 1000L
     val now: Long = System.currentTimeMillis()
     val d: Long = now - timeBack
 
     val pmsArray: Array[(Int, ProductModel)] = model.productModels.toArray
-    val recent = pmsArray.filter { case (id, pm) =>  ( pm.item.setTime >= d && pm.count > 10 ) }
-    
-    val recentArray = recent.toArray
+    val recent = pmsArray.filter { case (id, pm) => (pm.item.setTime >= d && pm.count > minCount) }
 
+    val recentArray = recent.toArray
     logger.info("going into sort")
     // sort remaining product models w.r.t. counts
-//    Sorting.quickSort(recentArray)(Ordering.by[(Int, ProductModel), Int](_._2.count).reverse)
     Sorting.quickSort(recentArray)(Ordering.by[(Int, ProductModel), Int](_._2.count).reverse)
     val topArray = recentArray.slice(0, maxNum)
 
-    val topsRDD: RDD[(Int, ProductModel)] = sc.parallelize(topArray)
-    logger.info("tops rdd size: " + topsRDD.count().toString)
-
-    //        logger.info("exporting tops to file ...")
-    //        exportForClustering(topsRDD)
-    //        logger.info("  ... done")
-
-    topsRDD
+    topArray
   }
 
   /**
@@ -1129,13 +1364,12 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    * INPUT:
    * topsForClustering: the map itemID -> ProductModel for all top items
    * maxIterations: number of iterations of cluster algorithm
-   * numClusters: number of clusters the top items should be devided in
+   * numClusters: number of clusters the top items should be divided in
    */
-  private def runClusterAlgorithm(sc: SparkContext, topsForClustering: RDD[(Int, ProductModel)], maxIterations: Int, numClusters: Int): RDD[(Int, Int)] = {
+  private def runClusterAlgorithm(topsForClustering: Array[(Int, ProductModel)], maxIterations: Int, numClusters: Int): Array[(Int, Int)] = {
 
     // extract the features and the count maps
-    val dataRDD: RDD[(Int, Array[Double])] = topsForClustering.map { case (id, pm) => (id, pm.features.get) }
-    val dataArray = dataRDD.collect()
+    val dataArray: Array[(Int, Array[Double])] = topsForClustering.map { case (id, pm) => (id, pm.features.get) }
 
     logger.info("dataArray size: " + dataArray.size.toString())
 
@@ -1144,6 +1378,8 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
 
     // get only the features as vector
     val vectorOfFeatures = featureArray.toVector
+
+    val sc = new SparkContext()
 
     val featuresRDD = sc.parallelize(vectorOfFeatures.map { x => Vectors.dense(x) })
 
@@ -1165,19 +1401,25 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     }
 
     val itemToClusterArray: Array[(Int, Int)] = itemToClusterMap.toArray
-    val returnRDD: RDD[(Int, Int)] = sc.parallelize(itemToClusterArray)
 
-    returnRDD
+    sc.stop()
+
+    itemToClusterArray
   }
 
-  private def collectOverAllClusters(itemToClusterRDD: RDD[(Int, Int)], itemToCountRDD: RDD[(Int, Int)], query: Query): Array[ItemScore] = {
+  //  private def collectOverAllClusters(itemToClusterRDD: RDD[(Int, Int)], itemToCountRDD: RDD[(Int, Int)], query: Query): Array[ItemScore] = {
+  private def collectOverAllClusters(itemToClusterArray: Array[(Int, Int)], itemToCountArray: Array[(Int, Int)], query: Query): Array[ItemScore] = {
+
     val totalNum = query.num
 
-    val clusterIDArray = itemToClusterRDD.map { case (itemid, clusterid) => clusterid }.collect().distinct
+    //    val clusterIDArray = itemToClusterRDD.map { case (itemid, clusterid) => clusterid }.collect().distinct
+    val clusterIDArray = itemToClusterArray.map { case (itemid, clusterid) => clusterid }.distinct
     val nrClusters = clusterIDArray.length
 
-    val itemToCountMap = itemToCountRDD.collect().toMap
-    val itemToClusterMap = itemToClusterRDD.collect().toMap
+    //    val itemToCountMap = itemToCountRDD.collect().toMap
+    val itemToCountMap = itemToCountArray.toMap
+    //    val itemToClusterMap = itemToClusterRDD.collect().toMap
+    val itemToClusterMap = itemToClusterArray.toMap
 
     logger.info("available cluster ids: ")
     for (i <- 0 to nrClusters - 1) {
@@ -1189,12 +1431,14 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     var finalIds: Array[Int] = Array.emptyIntArray
     for (i <- 0 to nrClusters - 1) {
       val clusterid = clusterIDArray(i)
-      val currentClustersIDs = itemToClusterRDD.filter(_._2 == clusterid)
+      //      val currentClustersIDs = itemToClusterRDD.filter(_._2 == clusterid)
+      val currentClustersIDs = itemToClusterArray.filter(_._2 == clusterid)
 
-      logger.info("num in cluster " + clusterid.toString() + ": " + currentClustersIDs.count().toString() + "/" + numPerCluster.toString())
+      logger.info("num in cluster " + clusterid.toString() + ": " + currentClustersIDs.length.toString() + "/" + numPerCluster.toString())
 
       // sort these items w.r.t. count and get top n
-      val itemIdsCountArray: Array[(Int, Int)] = currentClustersIDs.collect()
+      //      val itemIdsCountArray: Array[(Int, Int)] = currentClustersIDs.collect()
+      val itemIdsCountArray: Array[(Int, Int)] = currentClustersIDs
         .map { case (itemid, clusterid) => (itemid, itemToCountMap.get(itemid).get) }
       //        .map{ case ( itemid,clusterid ) => ( itemid, itemToCountRDD.filter( _._1 ) )  }
 
@@ -1235,13 +1479,16 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     itemClusters
   }
 
-  def collectFromSpecificCluster(itemToClusterRDD: RDD[(Int, Int)], itemToCountRDD: RDD[(Int, Int)], query: Query): Array[ItemScore] = {
+  //  def collectFromSpecificCluster(itemToClusterRDD: RDD[(Int, Int)], itemToCountRDD: RDD[(Int, Int)], query: Query): Array[ItemScore] = {
+  def collectFromSpecificCluster(itemToClusterArray: Array[(Int, Int)], itemToCountArray: Array[(Int, Int)], query: Query): Array[ItemScore] = {
 
     val totalNum = query.num
     val returnCluster = query.returnCluster.get
 
-    val itemToClusterMap = itemToClusterRDD.collect().toMap
-    val itemToCountMap = itemToCountRDD.collect().toMap
+    //    val itemToClusterMap = itemToClusterRDD.collect().toMap
+    val itemToClusterMap = itemToClusterArray.toMap
+    //    val itemToCountMap = itemToCountRDD.collect().toMap
+    val itemToCountMap = itemToCountArray.toMap
 
     // filter all items w.r.t desired cluster number
     val clustersItems = itemToClusterMap.filter(x => x._2 == returnCluster).toArray

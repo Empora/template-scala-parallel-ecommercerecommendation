@@ -105,8 +105,8 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 
 //	  val st1: String = "ECommAlgorithmTest2 Int variant\n"
 //	  val st2: String = "Test ALS.trainImplicit\n"
-//	  val strarray: String = st1 + st2
-//	  scala.tools.nsc.io.File("/home/andre/RecommendationEngine/Engines/TestStringInt/TestInt/IntVariant/TestLog.txt").writeAll(strarray)
+//	  var strarray: String = st1 + st2
+//	  scala.tools.nsc.io.File("/home/andre/RecommendationEngine/Engines/TestStringInt/TestLog.txt").writeAll(strarray)
 
 		val preparedData = new PreparedData(
 				users = sc.parallelize(users.toSeq),
@@ -141,34 +141,34 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 
       
       // write the vectors to log file
-//			addToLog("feature vector user u1:\n")
+//			strarray = addToLog(strarray, "feature vector user u1:\n")
 //			for ( i <- 0 to 9 ) {
 //				val v: String = featureU1.get(i).toString() + "\n"
-//						addToLog(v)
+//				strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector user u2:\n")    
+//			strarray =addToLog(strarray,"feature vector user u2:\n")    
 //			for ( i <- 0 to 9 ) {
 //				val v: String = featureU2.get(i).toString() + "\n"
-//						addToLog(v)
+//						strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector user u3:\n")    
+//			strarray =addToLog(strarray,"feature vector user u3:\n")    
 //			for ( i <- 0 to 9 ) {
 //				val v: String = featureU3.get(i).toString() + "\n"
-//						addToLog(v)
+//						strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector user u4:\n")    
+//			strarray =addToLog(strarray,"feature vector user u4:\n")    
 //			for ( i <- 0 to 9 ) {
 //				val v: String = featureU4.get(i).toString() + "\n"
-//						addToLog(v)
+//						strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector user u5:\n")    
+//			strarray =addToLog(strarray,"feature vector user u5:\n")    
 //			for ( i <- 0 to 9 ) {
 //				val v: String = featureU5.get(i).toString() + "\n"
-//						addToLog(v)
+//						strarray = addToLog(strarray,v)
 //			}
 
 			// second, the feature vectors for the items
@@ -180,53 +180,73 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 	  	val featureI4: Option[Array[Double]] = F.get(4)
 			val featureI5: Option[Array[Double]] = F.get(5)
 
-//			addToLog("feature vector item i1:\n")    
+//			strarray =addToLog(strarray,"feature vector item i1:\n")    
 //			for ( i <- 0 to 9 ) {
 //					val v: String = featureI1.get(i).toString() + "\n"
-//					addToLog(v)
+//					strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector item i2:\n")    
+//			strarray =addToLog(strarray,"feature vector item i2:\n")    
 //			for ( i <- 0 to 9 ) {
 //			  	val v: String = featureI2.get(i).toString() + "\n"
-//					addToLog(v)
+//					strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector item i3:\n")    
+//			strarray =addToLog(strarray,"feature vector item i3:\n")    
 //			for ( i <- 0 to 9 ) {
 //			  	val v: String = featureI3.get(i).toString() + "\n"
-//					addToLog(v)
+//					strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector item i4:\n")    
+//			strarray =addToLog(strarray,"feature vector item i4:\n")    
 //			for ( i <- 0 to 9 ) {
 //					val v: String = featureI4.get(i).toString() + "\n"
-//					addToLog(v)
+//					strarray = addToLog(strarray,v)
 //			}
 //
-//			addToLog("feature vector item i5:\n")    
+//			strarray =addToLog(strarray,"feature vector item i5:\n")    
 //			for ( i <- 0 to 9 ) {
 //					val v: String = featureI5.get(i).toString() + "\n"
-//					addToLog(v)
+//					strarray = addToLog(strarray,v)
 //			}
-      
+//				  scala.tools.nsc.io.File("/home/andre/RecommendationEngine/Engines/TestStringInt/TestLog.txt").writeAll(strarray)
+
+
+			// SPARK 1.5.1
       // check the first and last coordinate of the feature vector of the first user
-      (math floor (featureU1.get(0)*1000) )/1000 shouldBe 0.136
-      (math floor (featureU1.get(9)*1000) )/1000 shouldBe 0.21
+      (math floor (featureU1.get(0)*1000) )/1000 shouldBe 0.172
+      (math floor (featureU1.get(9)*1000) )/1000 shouldBe 0.233
 
       // check the first and last coordinate of the feature vector of the last user
-      (math floor (featureU5.get(0)*1000) )/1000 shouldBe -0.102
-      (math floor (featureU5.get(9)*1000) )/1000 shouldBe -0.263
+      (math floor (featureU5.get(0)*1000) )/1000 shouldBe -0.103
+      (math floor (featureU5.get(9)*1000) )/1000 shouldBe -0.275
       
       
       // check the first and last coordinate of the feature vector of the first item
-      (math floor (featureI1.get(0)*1000) )/1000 shouldBe 0.351
-      (math floor (featureI1.get(9)*1000) )/1000 shouldBe 0.684
+      (math floor (featureI1.get(0)*1000) )/1000 shouldBe 0.353
+      (math floor (featureI1.get(9)*1000) )/1000 shouldBe 0.690
 
       // check the first and last coordinate of the feature vector of the last item
-      (math floor (featureI5.get(0)*1000) )/1000 shouldBe -0.031
-      (math floor (featureI5.get(9)*1000) )/1000 shouldBe -0.216
+      (math floor (featureI5.get(0)*1000) )/1000 shouldBe -0.057
+      (math floor (featureI5.get(9)*1000) )/1000 shouldBe -0.253
       
+      // SPARK 1.3.1
+            // check the first and last coordinate of the feature vector of the first user
+//      (math floor (featureU1.get(0)*1000) )/1000 shouldBe 0.136
+//      (math floor (featureU1.get(9)*1000) )/1000 shouldBe 0.210
+//
+//      // check the first and last coordinate of the feature vector of the last user
+//      (math floor (featureU5.get(0)*1000) )/1000 shouldBe -0.102
+//      (math floor (featureU5.get(9)*1000) )/1000 shouldBe -0.263
+//      
+//      
+//      // check the first and last coordinate of the feature vector of the first item
+//      (math floor (featureI1.get(0)*1000) )/1000 shouldBe 0.351
+//      (math floor (featureI1.get(9)*1000) )/1000 shouldBe 0.684
+//
+//      // check the first and last coordinate of the feature vector of the last item
+//      (math floor (featureI5.get(0)*1000) )/1000 shouldBe -0.031
+//      (math floor (featureI5.get(9)*1000) )/1000 shouldBe -0.216
 	}    
 
   
@@ -273,5 +293,12 @@ extends FlatSpec with EngineTestSparkContext with Matchers
 //======================================================================================================
 //======================================================================================================
 
+//	def addToLog(a: String,s : String): String = 
+//	{
+//	  var b: String= ""
+//	  b = a + s
+////	  scala.tools.nsc.io.File("/home/andre/RecommendationEngine/Engines/TestStringInt/TestLog.txt").writeAll(s)
+//    b
+//	}
 
 }
