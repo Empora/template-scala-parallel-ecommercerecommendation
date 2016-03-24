@@ -269,7 +269,9 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
     method match {
       // if the method in query equals "recommend" then go into the template's standard
       // recommendation procedure
-      case "recommend" => predictedResult = getRecommendations(model, query)
+      case "recommend" => predictedResult = getRecommendations(model, query, true)
+      case "recommend_fast" => predictedResult = getRecommendations(model, query, false)
+      
       // if the method in query equals "cluster" then go into clustering methods and return
       // outfit suggestions based on clustering result
       case "cluster" => {
@@ -371,7 +373,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
    * If a whiteList containing outfit ids is submitted in the query, then only the outfits
    * contained in the white list will be recommended
    */
-  def getRecommendations(model: ECommModel, query: Query): PredictedResult = {
+  def getRecommendations(model: ECommModel, query: Query, useUserToUserRecommendations: Boolean): PredictedResult = {
 
     val userFeatures = model.userFeatures
     val productModels = model.productModels
@@ -396,7 +398,7 @@ class ECommAlgorithm(val ap: ECommAlgorithmParams)
       //      logger.info("query.categories.get.contains(product): " + query.categories.get.contains("product"))
 
       logger.info("whiteList: " + whiteList.getOrElse(Set[Int]()).size)
-      if ((!query.purchasable.isEmpty && !query.purchasable.get.isEmpty()) || whiteList.size > 0) {
+      if (!useUserToUserRecommendations || (!query.purchasable.isEmpty && !query.purchasable.get.isEmpty()) || whiteList.size > 0) {
         logger.info("purchasable is NOT empty AND countryCode string is NOT empty")
 
         predictKnownUser(
